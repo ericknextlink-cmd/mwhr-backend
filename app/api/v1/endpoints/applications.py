@@ -134,7 +134,12 @@ async def generate_certificate(
     # Generate PDF
     pdf_buffer = certificate_generator.generate(application, application.company_info.company_name)
     
-    filename = f"Certificate_{application.certificate_class}_{application.company_info.company_name}.pdf".replace(" ", "_")
+    # NEW FILENAME FORMAT: CompanyName_Type_Class_CertificateNumber.pdf
+    company_clean = application.company_info.company_name.replace(" ", "_")
+    type_clean = application.certificate_type.replace(" ", "_")
+    class_clean = (application.certificate_class or "N/A").replace(" ", "_")
+    
+    filename = f"{company_clean}_{type_clean}_{class_clean}_{application.id}.pdf"
 
     return StreamingResponse(
         pdf_buffer, 
@@ -184,12 +189,29 @@ async def read_applications(
     Retrieve applications.
     """
     if current_user.is_superuser:
-        statement = select(Application).order_by(Application.created_at.desc()).offset(skip).limit(limit)
+        statement = select(Application).options(selectinload(Application.company_info), selectinload(Application.user)).order_by(Application.created_at.desc()).offset(skip).limit(limit)
     else:
-        statement = select(Application).where(Application.user_id == current_user.id).order_by(Application.created_at.desc()).offset(skip).limit(limit)
+        statement = select(Application).where(Application.user_id == current_user.id).options(selectinload(Application.company_info), selectinload(Application.user)).order_by(Application.created_at.desc()).offset(skip).limit(limit)
         
     applications = await session.exec(statement)
-    return applications.all()
+    results = applications.all()
+    
+    # Convert to Pydantic objects for clean serialization
+    read_results = [ApplicationRead.model_validate(app) for app in results]
+    
+    # Manually populate company_name and user_email for the response
+    for i, app in enumerate(results):
+        try:
+            # Safely check for company_info from the database record
+            if hasattr(app, 'company_info') and app.company_info:
+                read_results[i].company_name = app.company_info.company_name
+            # Safely check for user from the database record
+            if hasattr(app, 'user') and app.user:
+                read_results[i].user_email = app.user.email
+        except Exception as e:
+            print(f"DEBUG: Error processing application data for ID {app.id if hasattr(app, 'id') else 'unknown'}: {e}")
+            
+    return read_results
 
 class BulkPaymentRequest(BaseModel):
     application_ids: List[int]

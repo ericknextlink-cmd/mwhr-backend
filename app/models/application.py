@@ -67,6 +67,8 @@ class ApplicationRead(ApplicationBase):
     user_id: int
     expiry_date: Optional[datetime] = None
     assigned_to: Optional[int] = None
+    company_name: Optional[str] = None
+    user_email: Optional[str] = None
 
 class ApplicationUpdate(SQLModel):
     certificate_type: Optional[CertificateType] = None

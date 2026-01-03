@@ -215,6 +215,13 @@ async def update_application_status(
     if not application.assigned_to:
         raise HTTPException(status_code=400, detail="Please assign this application to yourself before taking action.")
     
+    # SECURITY/LOGIC: Prevent approval of incomplete applications
+    if status == ApplicationStatus.APPROVED and application.status not in [ApplicationStatus.SUBMITTED, ApplicationStatus.IN_REVIEW]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot approve an incomplete application. Current status is '{application.status}'. Application must be submitted first."
+        )
+
     application.status = status
     
     # Set expiry date if approved
