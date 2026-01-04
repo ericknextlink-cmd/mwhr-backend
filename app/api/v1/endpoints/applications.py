@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import select
+from sqlmodel import select, or_
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -57,14 +57,14 @@ async def verify_otp_code(payload: OTPVerify):
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
     return {"message": "Verified", "token": token}
 
-@router.get("/public/verify/{id}", response_model=ApplicationVerifyResponse)
+@router.get("/public/verify/{identifier}", response_model=ApplicationVerifyResponse)
 async def verify_certificate(
-    id: int,
+    identifier: str,
     token: str,
     session: AsyncSession = Depends(deps.get_session),
 ):
     """
-    Public endpoint to verify a certificate by Application ID.
+    Public endpoint to verify a certificate by Application ID, Certificate Number, or Security Token.
     Requires a valid verification token from OTP flow.
     """
     # Verify Token
@@ -72,7 +72,15 @@ async def verify_certificate(
         raise HTTPException(status_code=401, detail="Verification session expired. Please verify phone number again.")
 
     # Fetch application with company info
-    query = select(Application).where(Application.id == id).options(selectinload(Application.company_info))
+    # Search by Certificate Number OR Security Token OR ID (if numeric)
+    conditions = [
+        Application.certificate_number == identifier,
+        Application.security_token == identifier
+    ]
+    if identifier.isdigit():
+        conditions.append(Application.id == int(identifier))
+        
+    query = select(Application).where(or_(*conditions)).options(selectinload(Application.company_info))
     result = await session.exec(query)
     application = result.first()
 

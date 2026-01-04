@@ -1,6 +1,7 @@
 from typing import Optional, TYPE_CHECKING, List
 from enum import Enum
 from datetime import datetime
+import uuid
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
@@ -31,12 +32,18 @@ class ApplicationBase(SQLModel):
     status: ApplicationStatus = Field(default=ApplicationStatus.DRAFT)
     current_step: int = Field(default=1) # 1: Apply, 2: Select Class, etc.
     expiry_date: Optional[datetime] = Field(default=None) # Expiry date for approved certificates
+    issued_date: Optional[datetime] = Field(default=None) # Date the certificate was first approved
 
 class Application(ApplicationBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
+    # Security Fields (XSCNS)
+    certificate_number: Optional[str] = Field(default=None, index=True, unique=True)
+    internal_uid: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, unique=True, nullable=False)
+    security_token: Optional[str] = Field(default=None, index=True)
+
     # Foreign Key to User (Applicant)
     user_id: Optional[int] = Field(default=None, foreign_key="user.id")
     user: Optional["User"] = Relationship(
@@ -66,6 +73,8 @@ class ApplicationRead(ApplicationBase):
     updated_at: datetime
     user_id: int
     expiry_date: Optional[datetime] = None
+    issued_date: Optional[datetime] = None
+    certificate_number: Optional[str] = None
     assigned_to: Optional[int] = None
     company_name: Optional[str] = None
     user_email: Optional[str] = None

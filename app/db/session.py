@@ -7,7 +7,9 @@ engine = create_async_engine(
     settings.DATABASE_URL, 
     echo=True, 
     future=True,
-    connect_args={"statement_cache_size": 0}
+    connect_args={"statement_cache_size": 0},
+    pool_pre_ping=True,
+    pool_recycle=1800
 )
 
 async def get_session() -> AsyncSession:

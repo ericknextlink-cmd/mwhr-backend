@@ -1,5 +1,6 @@
 from typing import List, Any, Optional
 from datetime import datetime, timedelta
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlmodel import select, func, col, desc, asc, or_
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -14,6 +15,7 @@ from app.models.document import DocumentRead
 from app.services.audit_service import log_audit_event
 from app.services.notification_service import notify_user
 from app.services.storage_service import storage_service
+from app.services.security_service import security_service
 from app.core.config import settings
 
 router = APIRouter()
@@ -216,7 +218,7 @@ async def update_application_status(
         raise HTTPException(status_code=400, detail="Please assign this application to yourself before taking action.")
     
     # SECURITY/LOGIC: Prevent approval of incomplete applications
-    if status == ApplicationStatus.APPROVED and application.status not in [ApplicationStatus.SUBMITTED, ApplicationStatus.IN_REVIEW]:
+    if status == ApplicationStatus.APPROVED and application.status not in [ApplicationStatus.SUBMITTED, ApplicationStatus.IN_REVIEW, ApplicationStatus.SUSPENDED]:
         raise HTTPException(
             status_code=400, 
             detail=f"Cannot approve an incomplete application. Current status is '{application.status}'. Application must be submitted first."
@@ -227,6 +229,22 @@ async def update_application_status(
     # Set expiry date if approved
     if status == ApplicationStatus.APPROVED:
         application.expiry_date = datetime.utcnow() + timedelta(days=365)
+        
+        # Set issued date only if not already set (first time approval)
+        if not application.issued_date:
+            application.issued_date = datetime.utcnow()
+        
+        # XSCNS Security Generation
+        if not application.internal_uid:
+             application.internal_uid = uuid.uuid4()
+             
+        if not application.certificate_number:
+             sec_data = security_service.generate_certificate_number(
+                 application.certificate_class, 
+                 application.internal_uid
+             )
+             application.certificate_number = sec_data["full_number"]
+             application.security_token = sec_data["token"]
         
     session.add(application)
     

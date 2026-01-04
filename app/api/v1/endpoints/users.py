@@ -71,7 +71,7 @@ async def create_user(*, session: AsyncSession = Depends(get_session), user_in: 
     # Normalize email
     user_in.email = user_in.email.lower()
     
-    # Check if user already exists
+    # Check if user with email already exists
     statement = select(User).where(User.email == user_in.email)
     result = await session.exec(statement)
     user = result.first()
@@ -79,10 +79,22 @@ async def create_user(*, session: AsyncSession = Depends(get_session), user_in: 
     if user:
         raise HTTPException(status_code=400, detail="User with this email already exists")
     
+    # Check if user with company registration number already exists (if provided)
+    if user_in.company_registration_number:
+        statement_reg = select(User).where(User.company_registration_number == user_in.company_registration_number)
+        result_reg = await session.exec(statement_reg)
+        existing_reg = result_reg.first()
+        if existing_reg:
+            raise HTTPException(status_code=400, detail="A user with this Company Registration Number already exists.")
+
     hashed_password = get_password_hash(user_in.password)
     user = User(
         email=user_in.email, 
         hashed_password=hashed_password,
+        full_name=user_in.full_name, # Map companyName to full_name if needed, or stick to explicit fields
+        phone_number=user_in.phone_number,
+        company_registration_number=user_in.company_registration_number,
+        company_type=user_in.company_type,
         is_active=True, # Default to active
         is_superuser=False # Default to not superuser
     )

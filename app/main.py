@@ -1,9 +1,15 @@
 from contextlib import asynccontextmanager
+import sys
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.models import create_db_and_tables
 from app.api.v1.api import api_router # Import the main API router
+
+# Fix for asyncpg on Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

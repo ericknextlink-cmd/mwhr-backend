@@ -10,10 +10,22 @@ class UserRole(str, Enum):
     ADMIN = "admin" # Staff
     SUPER_ADMIN = "super_admin" # Ministry Official
 
+class CompanyType(str, Enum):
+    SOLE_PROPRIETORSHIP = "Sole Proprietorship"
+    LIMITED_LIABILITY = "Limited Liability"
+    PARTNERSHIP = "Partnership"
+    EXTERNAL_COMPANY = "External Company"
+    OTHER = "Other"
+
 class UserBase(SQLModel):
     email: str = Field(unique=True, index=True)
     full_name: Optional[str] = Field(default=None)
     phone_number: Optional[str] = Field(default=None)
+    
+    # New Fields for Company Registration
+    company_registration_number: Optional[str] = Field(default=None, index=True, unique=True)
+    company_type: Optional[str] = Field(default=None) # Storing as string to allow flexibility, or use Enum
+    
     is_active: bool = Field(default=True)
     is_superuser: bool = Field(default=False) # Keep for backward compatibility for now, sync with role later
     role: UserRole = Field(default=UserRole.USER, sa_column=Column(String))
