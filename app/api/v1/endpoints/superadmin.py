@@ -122,11 +122,21 @@ async def create_user(
         )
     
     # Create user manually to handle password hashing
+    
+    # Sync is_superuser flag with role
+    is_superuser_flag = user_in.is_superuser
+    is_verified_flag = user_in.is_verified
+    
+    if role in [UserRole.SUPER_ADMIN, UserRole.ADMIN]:
+        is_superuser_flag = True
+        is_verified_flag = True
+
     user = User(
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
         is_active=user_in.is_active,
-        is_superuser=user_in.is_superuser,
+        is_verified=is_verified_flag,
+        is_superuser=is_superuser_flag,
         role=role
     )
     

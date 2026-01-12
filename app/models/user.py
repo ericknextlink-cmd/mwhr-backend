@@ -27,6 +27,7 @@ class UserBase(SQLModel):
     company_type: Optional[str] = Field(default=None) # Storing as string to allow flexibility, or use Enum
     
     is_active: bool = Field(default=True)
+    is_verified: bool = Field(default=False)
     is_superuser: bool = Field(default=False) # Keep for backward compatibility for now, sync with role later
     role: UserRole = Field(default=UserRole.USER, sa_column=Column(String))
 

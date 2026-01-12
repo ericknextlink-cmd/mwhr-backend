@@ -8,6 +8,7 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from pathlib import Path
+from app.core.config import settings
 
 from app.services.storage_service import storage_service
 
@@ -73,7 +74,6 @@ class CertificateGenerator:
         if "CertificateType." in base_name:
              base_name = base_name.split(".")[-1].lower()
         
-        # Consolidate labels as requested
         if base_name in ["building", "civil"]:
             display_type = "General Building & Civil"
             template_filename = "building.pdf"
@@ -130,7 +130,7 @@ class CertificateGenerator:
                 'text': company_name.upper(),
                 'x': 1423.5,  # Center calculated from left: 937px, width: 973px
                 'y': 901,
-                'size': 64,  # 64px / 2
+                'size': 64, 
                 'font': self.fonts['bold'],
                 'align': 'center'
             },
@@ -138,7 +138,7 @@ class CertificateGenerator:
                 'text': company_address,
                 'x': 1455.5,  # Center calculated from left: 861px, width: 1189px
                 'y': 1025,
-                'size': 64,  # 64px / 2
+                'size': 64, 
                 'font': self.fonts['regular'],
                 'align': 'center'
             },
@@ -146,7 +146,7 @@ class CertificateGenerator:
                 'text': f"Certificate No. {cert_no}",
                 'x': 957,
                 'y': 1281,
-                'size': 44,  # 44px / 2
+                'size': 44, 
                 'font': self.fonts['regular'],
                 'align': 'left'
             },
@@ -154,7 +154,7 @@ class CertificateGenerator:
                 'text': f"Issued Date:  {issued_date}",
                 'x': 1105,
                 'y': 1371,
-                'size': 44,  # 44px / 2
+                'size': 44, 
                 'font': self.fonts['regular'],
                 'align': 'left'
             },
@@ -162,7 +162,7 @@ class CertificateGenerator:
                 'text': f"Expiry Date:  {expiry_date}",
                 'x': 1105,
                 'y': 1460,
-                'size': 44,  # 44px / 2
+                'size': 44, 
                 'font': self.fonts['regular'],
                 'align': 'left'
             },
@@ -170,7 +170,7 @@ class CertificateGenerator:
                 'text': f"Category {application.certificate_class or ''} – {display_type} Works, Financial Class- {f_class}",
                 'x': 1516.5,  # Center calculated from left: 655px, width: 1723px
                 'y': 1682,
-                'size': 44,  # 44px / 2
+                'size': 44, 
                 'font': self.fonts['bold'],
                 'align': 'center'
             }
@@ -187,9 +187,9 @@ class CertificateGenerator:
         # 7) QR Code (x: 2118, y: 3202)
         # Use security token for verification if available (XSCNS), else legacy ID
         if getattr(application, "security_token", None):
-             verify_url = f"https://ministry-app.vercel.app/verify/cert/{application.security_token}"
+             verify_url = f"{settings.FRONTEND_URL}/verify/cert/{application.security_token}"
         else:
-             verify_url = f"https://ministry-app.vercel.app/verify?id={application.id}" 
+             verify_url = f"{settings.FRONTEND_URL}/verify?id={application.id}" 
              
         qr = qrcode.make(verify_url)
         qr_img = ImageReader(qr.get_image())

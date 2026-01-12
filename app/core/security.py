@@ -34,6 +34,17 @@ def create_password_reset_token(email: str) -> str:
     )
     return encoded_jwt
 
+def create_verification_token(email: str) -> str:
+    delta = timedelta(hours=24) # Verification links typically last longer
+    now = datetime.now(timezone.utc)
+    expire = now + delta
+    encoded_jwt = jwt.encode(
+        {"exp": expire, "nbf": now, "sub": email, "type": "verification"}, 
+        settings.SECRET_KEY, 
+        algorithm=settings.ALGORITHM
+    )
+    return encoded_jwt
+
 def verify_token(token: str) -> Union[str, None]:
     try:
         decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])

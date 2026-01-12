@@ -4,11 +4,37 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db.session import get_session
 from app.models.user import User, UserCreate, UserRead
-from app.core.security import get_password_hash, verify_password
+from app.core.security import get_password_hash, verify_password, create_verification_token, verify_token
 from app.api import deps
+from app.services import email_service
 from pydantic import BaseModel
 
 router = APIRouter()
+
+@router.post("/verify-email/{token}", response_model=dict)
+async def verify_email(
+    token: str,
+    session: AsyncSession = Depends(deps.get_session),
+):
+    """
+    Verify email with token.
+    """
+    email = verify_token(token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    
+    statement = select(User).where(User.email == email)
+    result = await session.exec(statement)
+    user = result.first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user.is_verified = True
+    session.add(user)
+    await session.commit()
+    
+    return {"message": "Email verified successfully"}
 
 class PasswordChange(BaseModel):
     current_password: str
@@ -96,11 +122,17 @@ async def create_user(*, session: AsyncSession = Depends(get_session), user_in: 
         company_registration_number=user_in.company_registration_number,
         company_type=user_in.company_type,
         is_active=True, # Default to active
+        is_verified=False, # Must verify email
         is_superuser=False # Default to not superuser
     )
     session.add(user)
     await session.commit()
     await session.refresh(user)
+
+    # Send verification email
+    verification_token = create_verification_token(user.email)
+    await email_service.send_verification_email(user.email, verification_token)
+
     return user
 
 @router.get("/", response_model=List[UserRead])

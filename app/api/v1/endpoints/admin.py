@@ -411,6 +411,19 @@ async def upload_template(
             file_content,
             {"content-type": "application/pdf", "upsert": "true"} 
         )
+        
+        await log_audit_event(
+            session,
+            user_id=current_user.id,
+            action="TEMPLATE_UPDATED",
+            target_type="template",
+            target_id=0, # Templates are files, so no DB ID
+            target_label=file.filename,
+            details=f"Template {file.filename} uploaded/updated."
+        )
+        
+        await session.commit()
+        
         return {"message": f"Template {file.filename} uploaded successfully.", "path": file_path}
     except Exception as e:
         print(f"Error uploading template: {e}")
