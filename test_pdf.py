@@ -14,7 +14,7 @@ class MockCompany:
     company_name = "Test Construction Ltd"
 
 async def test_generation():
-    print("Testing PDF Generation...")
+    print("Testing PDF Generation....")
     app = MockApp()
     company_name = "Test Construction Ltd"
     
