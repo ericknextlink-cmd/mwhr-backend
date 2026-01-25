@@ -28,8 +28,13 @@ class Settings(BaseSettings):
     SMTP_PORT: int | None = None
     SMTP_USER: str | None = None
     SMTP_PASSWORD: str | None = None
-    EMAILS_FROM_EMAIL: str | None = "noreply@mail.nexlinktechnologies.com" # Default Resend sender
+    EMAILS_FROM_EMAIL: str | None = "noreply@mail.nexlinktechnologies.com"
     EMAILS_FROM_NAME: str | None = "Ministry Portal"
+    
+    # AI & Document Processing
+    OPENAI_API_KEY: str | None = None
+    UNSTRUCTURED_API_KEY: str | None = None
+    UNSTRUCTURED_API_URL: str | None = "https://api.unstructured.io"
 
     # CORS
     BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []

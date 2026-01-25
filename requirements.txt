@@ -20,3 +20,9 @@ reportlab
 qrcode
 pillow
 resend
+langchain
+langchain-community
+langchain-openai
+unstructured[pdf]
+openai
+chromadb

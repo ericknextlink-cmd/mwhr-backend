@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import users, login, applications, company_info, directors, documents, admin, notifications, superadmin
+from app.api.v1.endpoints import users, login, applications, company_info, directors, documents, admin, notifications, superadmin, analysis
 
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
@@ -11,3 +11,4 @@ api_router.include_router(documents.router, prefix="/documents", tags=["document
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"])
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(superadmin.router, prefix="/superadmin", tags=["superadmin"])
+api_router.include_router(analysis.router, prefix="/analyze", tags=["analysis"])
