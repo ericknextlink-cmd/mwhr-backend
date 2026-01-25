@@ -192,7 +192,7 @@ async def get_application_details_for_admin(
     details = AdminApplicationDetails.from_orm(result)
     if result.reviewer:
         details.reviewer_email = result.reviewer.email
-    
+        
     # Convert document storage paths to signed URLs for secure access
     if details.documents:
         for doc in details.documents:
