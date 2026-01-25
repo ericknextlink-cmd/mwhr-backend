@@ -23,6 +23,7 @@ resend
 langchain
 langchain-community
 langchain-openai
+langchain-text-splitters
 unstructured[pdf]
 openai
 chromadb
