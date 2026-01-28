@@ -43,16 +43,17 @@ class Application(ApplicationBase, table=True):
     certificate_number: Optional[str] = Field(default=None, index=True, unique=True)
     internal_uid: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, unique=True, nullable=False)
     security_token: Optional[str] = Field(default=None, index=True)
+    certificate_pdf_hash: Optional[str] = Field(default=None, index=True) # SHA-256 hash for tamper detection
 
     # Foreign Key to User (Applicant)
-    user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")
     user: Optional["User"] = Relationship(
         back_populates="applications",
         sa_relationship_kwargs={"foreign_keys": "[Application.user_id]"}
     )
     
     # Reviewer Assignment
-    assigned_to: Optional[int] = Field(default=None, foreign_key="user.id")
+    assigned_to: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")
     reviewer: Optional["User"] = Relationship(
         back_populates="assigned_applications",
         sa_relationship_kwargs={"foreign_keys": "[Application.assigned_to]"}
@@ -71,11 +72,11 @@ class ApplicationRead(ApplicationBase):
     id: int
     created_at: datetime
     updated_at: datetime
-    user_id: int
+    user_id: uuid.UUID
     expiry_date: Optional[datetime] = None
     issued_date: Optional[datetime] = None
     certificate_number: Optional[str] = None
-    assigned_to: Optional[int] = None
+    assigned_to: Optional[uuid.UUID] = None
     company_name: Optional[str] = None
     user_email: Optional[str] = None
 

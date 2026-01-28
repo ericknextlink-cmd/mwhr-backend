@@ -1,9 +1,10 @@
 from typing import Optional
+import uuid
 from datetime import datetime
 from sqlmodel import Field, Relationship, SQLModel
 
 class NotificationBase(SQLModel):
-    user_id: int # The admin receiving this notification
+    user_id: uuid.UUID # The admin receiving this notification
     title: str
     message: str
     is_read: bool = Field(default=False)

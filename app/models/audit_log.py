@@ -1,4 +1,5 @@
 from typing import Optional
+import uuid
 from datetime import datetime
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -12,7 +13,7 @@ class AuditLog(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     # Who performed the action
-    user_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")
     user: Optional["User"] = Relationship()
 
 class AuditLogRead(SQLModel):
@@ -23,5 +24,5 @@ class AuditLogRead(SQLModel):
     target_label: Optional[str] = None
     details: Optional[str]
     timestamp: datetime
-    user_id: int
+    user_id: Optional[uuid.UUID]
     user_email: Optional[str] = None # Computed field

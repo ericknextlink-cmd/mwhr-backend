@@ -43,6 +43,7 @@ class PasswordChange(BaseModel):
 class UserProfileUpdate(BaseModel):
     full_name: str | None = None
     phone_number: str | None = None
+    tutorials_completed: bool | None = None
 
 @router.get("/me", response_model=UserRead)
 async def read_user_me(
@@ -67,7 +68,9 @@ async def update_user_me(
         current_user.full_name = profile_in.full_name
     if profile_in.phone_number is not None:
         current_user.phone_number = profile_in.phone_number
-        
+    if profile_in.tutorials_completed is not None:
+        current_user.tutorials_completed = profile_in.tutorials_completed
+
     session.add(current_user)
     await session.commit()
     await session.refresh(current_user)

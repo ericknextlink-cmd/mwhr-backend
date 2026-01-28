@@ -15,10 +15,12 @@ class StorageService:
             )
         self.bucket_name = settings.SUPABASE_BUCKET_NAME
 
-    async def upload_file(self, file: UploadFile, user_id: int, application_id: int) -> str:
+    async def upload_file(self, file: UploadFile, user_id, application_certificate_type: str) -> str:
         """
         Uploads a file to Supabase Storage.
         Returns the storage path (key).
+        user_id: UUID of the user
+        application_certificate_type: Certificate type (e.g., "electrical", "building", "plumbing")
         """
         if not self.client:
             raise HTTPException(status_code=500, detail="Storage service not configured.")
@@ -28,9 +30,9 @@ class StorageService:
         unique_id = str(uuid.uuid4())
         clean_filename = f"{unique_id}.{file_ext}"
 
-        # 2. Create path: user_{id}/app_{app_id}/{filename}
-        # Organized by User -> Application
-        file_path = f"user_{user_id}/app_{application_id}/{clean_filename}"
+        # 2. Create path: user_{uuid}/{certificate_type}/{filename}
+        # Organized by User -> Certificate Type (not application ID)
+        file_path = f"user_{user_id}/{application_certificate_type}/{clean_filename}"
 
         # 3. Read file content
         file_content = await file.read()

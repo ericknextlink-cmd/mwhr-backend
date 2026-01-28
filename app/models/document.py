@@ -14,6 +14,7 @@ class DocumentBase(SQLModel):
     document_type: DocumentType
     filename: str
     file_url: str # Path to file on disk or S3 URL
+    previous_file_url: Optional[str] = None # Tracks replaced file URL for change history
 
 class Document(DocumentBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

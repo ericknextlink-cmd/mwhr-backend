@@ -1,5 +1,7 @@
 import os
 import qrcode
+import hashlib
+from typing import Tuple
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from datetime import datetime
@@ -68,7 +70,7 @@ class CertificateGenerator:
         suffix = 'th' if 11 <= day <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
         return f"{day}{suffix} {dt.strftime('%B %Y')}"
 
-    def generate(self, application, company_name: str):
+    def generate(self, application, company_name: str) -> Tuple[BytesIO, str]:
         raw_type = application.certificate_type
         base_name = raw_type.value if hasattr(raw_type, 'value') else str(raw_type)
         if "CertificateType." in base_name:
@@ -176,13 +178,64 @@ class CertificateGenerator:
             }
         }
 
-        # Draw each text element on the canvas
-        for item in text_elements.values():
-            c.setFont(item['font'], item['size'])
-            if item['align'] == 'center':
-                c.drawCentredString(sx(item['x']), sy(item['y']), item['text'])
-            else:
-                c.drawString(sx(item['x']), sy(item['y']), item['text'])
+        # Draw each text element on the canvas as images (OCR-proof)
+        # Render text to PIL Images to prevent OCR scanning
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            import textwrap
+            
+            for item in text_elements.values():
+                # Calculate text dimensions
+                font_size = int(item['size'] * 0.75)  # Convert points to pixels (approx)
+                text = item['text']
+                
+                # Create image with transparent background
+                # Estimate size: width based on text length, height based on font size
+                img_width = int(font_size * len(text) * 0.6)
+                img_height = int(font_size * 1.5)
+                img = Image.new('RGBA', (img_width, img_height), (255, 255, 255, 0))
+                draw = ImageDraw.Draw(img)
+                
+                # Try to load font, fallback to default
+                try:
+                    # Use default font (system font)
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                except:
+                    try:
+                        font = ImageFont.load_default()
+                    except:
+                        font = None
+                
+                # Draw text on image
+                text_bbox = draw.textbbox((0, 0), text, font=font) if font else (0, 0, img_width, img_height)
+                text_x = (img_width - (text_bbox[2] - text_bbox[0])) / 2 if item['align'] == 'center' else 0
+                text_y = (img_height - (text_bbox[3] - text_bbox[1])) / 2
+                
+                draw.text((text_x, text_y), text, fill=(0, 0, 0, 255), font=font)
+                
+                # Convert to bytes and create ImageReader
+                img_bytes = BytesIO()
+                img.save(img_bytes, format='PNG', dpi=(300, 300))
+                img_bytes.seek(0)
+                img_reader = ImageReader(img_bytes)
+                
+                # Draw image on canvas
+                img_width_pts = sx(img_width * 0.75)  # Convert pixels to points
+                img_height_pts = sy(img_height * 0.75) - sy(0)
+                
+                if item['align'] == 'center':
+                    c.drawImage(img_reader, sx(item['x']) - img_width_pts/2, sy(item['y']) - img_height_pts, width=img_width_pts, height=img_height_pts)
+                else:
+                    c.drawImage(img_reader, sx(item['x']), sy(item['y']) - img_height_pts, width=img_width_pts, height=img_height_pts)
+        except Exception as e:
+            # Fallback to text rendering if image conversion fails
+            print(f"Warning: OCR-proof rendering failed, using text fallback: {e}")
+            for item in text_elements.values():
+                c.setFont(item['font'], item['size'])
+                if item['align'] == 'center':
+                    c.drawCentredString(sx(item['x']), sy(item['y']), item['text'])
+                else:
+                    c.drawString(sx(item['x']), sy(item['y']), item['text'])
 
         # 7) QR Code (x: 2118, y: 3202)
         # Use security token for verification if available (XSCNS), else legacy ID
@@ -200,7 +253,23 @@ class CertificateGenerator:
         overlay_reader = PdfReader(overlay_buffer); overlay_page = overlay_reader.pages[0]
         page_orig.merge_page(overlay_page)
 
-        output_buffer = BytesIO(); writer = PdfWriter(); writer.add_page(page_orig); writer.write(output_buffer); output_buffer.seek(0)
-        return output_buffer
+        # Create final PDF
+        output_buffer = BytesIO()
+        writer = PdfWriter()
+        writer.add_page(page_orig)
+        writer.write(output_buffer)
+        output_buffer.seek(0)
+        
+        # Generate SHA-256 hash for tamper detection
+        # Any modification to the PDF (even if reverted) will change this hash
+        pdf_bytes = output_buffer.read()
+        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+        
+        # Reset buffer for return
+        output_buffer.seek(0)
+        
+        # Return both PDF and hash
+        # Hash is stored in database - any mismatch indicates tampering
+        return output_buffer, pdf_hash
 
 certificate_generator = CertificateGenerator()

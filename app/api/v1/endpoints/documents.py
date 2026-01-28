@@ -1,4 +1,5 @@
 from typing import List
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -32,6 +33,11 @@ async def upload_document(
 ):
     """
     Upload a document to Supabase Storage.
+    If a document of the same type already exists, replaces it:
+    - Stores old file_url in previous_file_url
+    - Uploads new file
+    - Deletes old file from storage
+    - Updates document record with new file_url
     """
     await verify_application_ownership(session, application_id, current_user.id)
 
@@ -41,22 +47,43 @@ async def upload_document(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document type")
 
-    # Upload to Supabase
-    # Returns the storage path (e.g. user_123/app_456/uuid.pdf)
-    storage_path = await storage_service.upload_file(file, current_user.id, application_id)
-
-    # Create DB entry
-    document = Document(
-        application_id=application_id,
-        document_type=doc_type_enum,
-        filename=file.filename,
-        file_url=storage_path # Store the path, not the full signed URL
-    )
+    # Get application to access certificate_type
+    application = await session.get(Application, application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
     
-    session.add(document)
+    # Check if document of this type already exists for this application
+    existing_doc_query = select(Document).where(
+        Document.application_id == application_id,
+        Document.document_type == doc_type_enum
+    )
+    existing_doc_result = await session.exec(existing_doc_query)
+    existing_document = existing_doc_result.first()
+
+    # Upload new file to Supabase (using certificate_type instead of app_id)
+    certificate_type_str = application.certificate_type.value if hasattr(application.certificate_type, 'value') else str(application.certificate_type)
+    storage_path = await storage_service.upload_file(file, current_user.id, certificate_type_str)
+
+    old_file_url = None
+    if existing_document:
+        # Document replacement: track old file and delete it
+        old_file_url = existing_document.file_url
+        existing_document.previous_file_url = old_file_url
+        existing_document.file_url = storage_path
+        existing_document.filename = file.filename
+        existing_document.uploaded_at = datetime.utcnow()
+        document = existing_document
+    else:
+        # New document
+        document = Document(
+            application_id=application_id,
+            document_type=doc_type_enum,
+            filename=file.filename,
+            file_url=storage_path
+        )
+        session.add(document)
 
     # Update application step to 7 (Review) if it's less than 7
-    # Note: Step logic might need adjustment based on your specific flow requirements
     application = await session.get(Application, application_id)
     if application and application.current_step < 7:
         application.current_step = 7
@@ -64,7 +91,15 @@ async def upload_document(
 
     await session.commit()
     await session.refresh(document)
-    
+
+    # Delete old file from storage after successful DB update
+    if old_file_url:
+        try:
+            storage_service.delete_file(old_file_url)
+        except Exception as e:
+            # Log but don't fail the request - file is already replaced in DB
+            print(f"Warning: Failed to delete old file {old_file_url}: {e}")
+
     # Return with signed URL for immediate display
     document.file_url = storage_service.get_signed_url(document.file_url)
     return document
