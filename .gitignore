@@ -50,3 +50,6 @@ Thumbs.db
 uploads/
 generated_certificates/
 *.log
+
+# SQL files (should not be committed)
+*.sql
