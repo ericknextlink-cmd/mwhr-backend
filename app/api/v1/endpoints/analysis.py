@@ -6,15 +6,20 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.api import deps
 from app.models.user import User
 
-try:
-    from app.services.pdf_analysis_service import pdf_analysis_service
-except ImportError:
-    pdf_analysis_service = None
+# Lazy imports so app startup binds to PORT quickly (avoids loading torch/langchain/chromadb at import time)
+def _get_pdf_analysis_service():
+    try:
+        from app.services.pdf_analysis_service import pdf_analysis_service
+        return pdf_analysis_service
+    except ImportError:
+        return None
 
-try:
-    from app.services.pdf_extract_local import extract_text_from_pdf_url
-except ImportError:
-    extract_text_from_pdf_url = None
+def _get_extract_text_from_pdf_url():
+    try:
+        from app.services.pdf_extract_local import extract_text_from_pdf_url
+        return extract_text_from_pdf_url
+    except ImportError:
+        return None
 
 router = APIRouter()
 
@@ -50,6 +55,7 @@ async def analyze_document(
     current_user: User = Depends(deps.get_current_user),
     session: AsyncSession = Depends(deps.get_session),
 ):
+    pdf_analysis_service = _get_pdf_analysis_service()
     if not pdf_analysis_service:
         raise HTTPException(
             status_code=503,
@@ -101,6 +107,7 @@ async def extract_document_text(
     Extract text from a PDF (e.g. signed URL). Uses local PyMuPDF + OCR for scanned/image pages.
     Use this when the main analyze endpoint is unavailable or when you only need text (e.g. fallback).
     """
+    extract_text_from_pdf_url = _get_extract_text_from_pdf_url()
     if not extract_text_from_pdf_url:
         raise HTTPException(
             status_code=503,
