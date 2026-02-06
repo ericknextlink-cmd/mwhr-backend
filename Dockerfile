@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     tesseract-ocr \
     tesseract-ocr-eng \
-    libgl1-mesa-glx \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
