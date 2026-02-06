@@ -10,10 +10,13 @@ ENV PYTHONDONTWRITEBYTECODE 1
 # Prevents Python from buffering stdout and stderr
 ENV PYTHONUNBUFFERED 1
 
-# Install system dependencies
+# Install system dependencies (including Tesseract for PDF OCR / scanned documents)
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

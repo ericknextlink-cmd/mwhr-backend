@@ -27,3 +27,5 @@ langchain-text-splitters
 unstructured[pdf]
 openai
 chromadb
+pymupdf
+pytesseract

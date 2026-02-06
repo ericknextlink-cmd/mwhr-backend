@@ -1,5 +1,6 @@
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -13,12 +14,17 @@ from app.models.user import User
 from app.models.company_info import CompanyInfo
 from app.models.director import Director
 from app.models.document import Document
+from app.core.security import create_renewal_token, decode_renewal_token
 from app.services.certificate_generator import certificate_generator
 from app.services.notification_service import notify_admins
 from app.services.otp_store import otp_store
 from app.services.storage_service import storage_service
 
 router = APIRouter()
+
+
+class RenewFromTokenRequest(BaseModel):
+    token: str
 
 class ApplicationVerifyResponse(BaseModel):
     id: int
@@ -153,26 +159,49 @@ async def generate_certificate(
     if not application.company_info:
         raise HTTPException(status_code=400, detail="Company information missing.")
 
-    # Generate PDF with tamper detection hash
-    pdf_buffer, pdf_hash = certificate_generator.generate(application, application.company_info.company_name)
-    
-    # Store hash in database for tamper verification (only if not already set or if regenerating)
+    # Filename for download and storage
+    company_clean = application.company_info.company_name.replace(" ", "_")
+    type_clean = application.certificate_type.replace(" ", "_")
+    class_clean = (application.certificate_class or "N/A").replace(" ", "_")
+    filename = f"{company_clean}_{type_clean}_{class_clean}_{application.id}.pdf"
+    cert_path = f"applications/{application.id}/certifications/{filename}"
+
+    now_utc = datetime.now(timezone.utc)
+    app_expiry = application.expiry_date
+    if app_expiry and getattr(app_expiry, "tzinfo", None) is None:
+        app_expiry = app_expiry.replace(tzinfo=timezone.utc)
+    is_expired = bool(application.expiry_date and app_expiry and app_expiry < now_utc)
+    renewal_token = create_renewal_token(application.id)
+
+    # For expired certs always regenerate so PDF shows expired layout and renewal link
+    existing_pdf = None if is_expired else storage_service.download_file(cert_path)
+    if existing_pdf:
+        return StreamingResponse(
+            BytesIO(existing_pdf),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+
+    # Generate PDF (with optional expired layout and renewal link)
+    pdf_buffer, pdf_hash = certificate_generator.generate(
+        application,
+        application.company_info.company_name,
+        renewal_token=renewal_token,
+        is_expired=is_expired,
+    )
     if not application.certificate_pdf_hash:
         application.certificate_pdf_hash = pdf_hash
         session.add(application)
         await session.commit()
-    
-    # NEW FILENAME FORMAT: CompanyName_Type_Class_CertificateNumber.pdf
-    company_clean = application.company_info.company_name.replace(" ", "_")
-    type_clean = application.certificate_type.replace(" ", "_")
-    class_clean = (application.certificate_class or "N/A").replace(" ", "_")
-    
-    filename = f"{company_clean}_{type_clean}_{class_clean}_{application.id}.pdf"
+
+    pdf_bytes = pdf_buffer.getvalue()
+    storage_service.upload_certificate(pdf_bytes, application.id, filename)
+    pdf_buffer.seek(0)
 
     return StreamingResponse(
-        pdf_buffer, 
-        media_type="application/pdf", 
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 @router.get("/reusable", response_model=List[ApplicationRead])
@@ -373,13 +402,8 @@ async def clone_application_data(
                     file=file_obj
                 )
                 
-                # Upload to new location (using certificate_type)
-                target_cert_type = target_app.certificate_type.value if hasattr(target_app.certificate_type, 'value') else str(target_app.certificate_type)
-                new_storage_path = await storage_service.upload_file(
-                    upload_file, 
-                    current_user.id, 
-                    target_cert_type
-                )
+                # Upload to target application folder: applications/{id}/documents/
+                new_storage_path = await storage_service.upload_file(upload_file, target_app.id)
                 
                 # Create new document record
                 new_document = Document(
@@ -789,6 +813,85 @@ async def renew_application(
     await session.commit()
     await session.refresh(new_app)
     return new_app
+
+
+@router.get("/renewal-token")
+async def get_renewal_token(
+    application_id: int,
+    session: AsyncSession = Depends(deps.get_session),
+):
+    """
+    Get a short-lived renewal token for an application (e.g. for use in certificate PDF link).
+    Public: no auth required. Only issued for approved applications.
+    """
+    result = await session.exec(select(Application).where(Application.id == application_id))
+    application = result.first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.status != ApplicationStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only approved certificates can be renewed.")
+    token = create_renewal_token(application_id)
+    return {"token": token}
+
+
+@router.post("/renew-from-token", response_model=ApplicationRead)
+async def renew_from_token(
+    body: RenewFromTokenRequest,
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Start a renewal using a token from the certificate renewal link.
+    Requires authentication; token is consumed to identify the application.
+    """
+    application_id = decode_renewal_token(body.token)
+    if application_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired renewal token.")
+    query = select(Application).where(Application.id == application_id).options(
+        selectinload(Application.company_info),
+        selectinload(Application.directors),
+    )
+    result = await session.exec(query)
+    original_app = result.first()
+    if not original_app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if original_app.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    if original_app.status != ApplicationStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Only approved applications can be renewed.")
+    # Reuse same renewal logic as POST /{id}/renew
+    new_app = Application(
+        certificate_type=original_app.certificate_type,
+        certificate_class=original_app.certificate_class,
+        description=f"Renewal of Application #{original_app.id}",
+        status=ApplicationStatus.DRAFT,
+        current_step=4,
+        user_id=current_user.id,
+    )
+    session.add(new_app)
+    await session.commit()
+    if original_app.company_info:
+        new_company_info = CompanyInfo(
+            company_name=original_app.company_info.company_name,
+            registration_number=original_app.company_info.registration_number,
+            phone=original_app.company_info.phone,
+            address=original_app.company_info.address,
+            business_type=original_app.company_info.business_type,
+            application_id=new_app.id,
+        )
+        session.add(new_company_info)
+    for director in original_app.directors:
+        new_director = Director(
+            name=director.name,
+            position=director.position,
+            nationality=director.nationality,
+            application_id=new_app.id,
+        )
+        session.add(new_director)
+    await session.commit()
+    await session.refresh(new_app)
+    return new_app
+
 
 @router.post("/{id}/cancel", response_model=ApplicationRead)
 async def cancel_application(

@@ -47,12 +47,10 @@ async def upload_document(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document type")
 
-    # Get application to access certificate_type
     application = await session.get(Application, application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     
-    # Check if document of this type already exists for this application
     existing_doc_query = select(Document).where(
         Document.application_id == application_id,
         Document.document_type == doc_type_enum
@@ -60,9 +58,8 @@ async def upload_document(
     existing_doc_result = await session.exec(existing_doc_query)
     existing_document = existing_doc_result.first()
 
-    # Upload new file to Supabase (using certificate_type instead of app_id)
-    certificate_type_str = application.certificate_type.value if hasattr(application.certificate_type, 'value') else str(application.certificate_type)
-    storage_path = await storage_service.upload_file(file, current_user.id, certificate_type_str)
+    # Upload to applications/{application_id}/documents/ for proper folder structure
+    storage_path = await storage_service.upload_file(file, application_id)
 
     old_file_url = None
     if existing_document:

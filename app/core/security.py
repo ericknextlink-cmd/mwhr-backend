@@ -51,3 +51,26 @@ def verify_token(token: str) -> Union[str, None]:
         return decoded_token["sub"]
     except jwt.JWTError:
         return None
+
+
+def create_renewal_token(application_id: int) -> str:
+    """Short-lived token for certificate renewal callback. Used in PDF renewal link."""
+    delta = timedelta(hours=24)
+    now = datetime.now(timezone.utc)
+    expire = now + delta
+    return jwt.encode(
+        {"exp": expire, "nbf": now, "application_id": application_id, "type": "renewal"},
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def decode_renewal_token(token: str) -> Union[int, None]:
+    """Returns application_id if token is valid renewal token, else None."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "renewal":
+            return None
+        return int(payload["application_id"])
+    except (jwt.JWTError, KeyError, TypeError, ValueError):
+        return None

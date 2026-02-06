@@ -8,8 +8,13 @@ from app.models.user import User
 
 try:
     from app.services.pdf_analysis_service import pdf_analysis_service
-except ImportError as e:
+except ImportError:
     pdf_analysis_service = None
+
+try:
+    from app.services.pdf_extract_local import extract_text_from_pdf_url
+except ImportError:
+    extract_text_from_pdf_url = None
 
 router = APIRouter()
 
@@ -22,6 +27,8 @@ class AnalyzeDocumentRequest(BaseModel):
     extract_tables: Optional[bool] = True
     extract_forms: Optional[bool] = False
     languages: Optional[List[str]] = ["eng"]
+    # If provided, LLM must verify document company matches this name; mismatch => company_match=False
+    application_company_name: Optional[str] = None
 
 
 class AnalyzeDocumentResponse(BaseModel):
@@ -32,6 +39,9 @@ class AnalyzeDocumentResponse(BaseModel):
     forms: List[dict] = []
     metadata: Optional[dict] = None
     error: Optional[str] = None
+    # Guard: document company must match application company
+    company_match: Optional[bool] = None
+    company_match_detail: Optional[str] = None
 
 
 @router.post("/document", response_model=AnalyzeDocumentResponse)
@@ -42,7 +52,7 @@ async def analyze_document(
 ):
     if not pdf_analysis_service:
         raise HTTPException(
-            status_code=500,
+            status_code=503,
             detail="PDF analysis service is not available. Please ensure all dependencies are installed."
         )
     
@@ -59,7 +69,8 @@ async def analyze_document(
         use_ocr=request.use_ocr,
         extract_tables=request.extract_tables,
         extract_forms=request.extract_forms,
-        languages=request.languages
+        languages=request.languages,
+        application_company_name=request.application_company_name,
     )
     
     if not result.get("success"):
@@ -69,3 +80,34 @@ async def analyze_document(
         )
     
     return AnalyzeDocumentResponse(**result)
+
+
+class ExtractDocumentRequest(BaseModel):
+    document_url: HttpUrl
+    use_ocr: Optional[bool] = True
+
+
+class ExtractDocumentResponse(BaseModel):
+    extracted_text: str
+    success: bool = True
+
+
+@router.post("/document-extract", response_model=ExtractDocumentResponse)
+async def extract_document_text(
+    request: ExtractDocumentRequest,
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Extract text from a PDF (e.g. signed URL). Uses local PyMuPDF + OCR for scanned/image pages.
+    Use this when the main analyze endpoint is unavailable or when you only need text (e.g. fallback).
+    """
+    if not extract_text_from_pdf_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Local PDF extraction is not available. Install PyMuPDF (pymupdf)."
+        )
+    text = await extract_text_from_pdf_url(
+        document_url=str(request.document_url),
+        use_ocr=request.use_ocr,
+    )
+    return ExtractDocumentResponse(extracted_text=text or "", success=bool(text))

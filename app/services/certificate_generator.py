@@ -1,7 +1,7 @@
 import os
 import qrcode
 import hashlib
-from typing import Tuple
+from typing import Tuple, Optional
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 from datetime import datetime
@@ -70,7 +70,19 @@ class CertificateGenerator:
         suffix = 'th' if 11 <= day <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
         return f"{day}{suffix} {dt.strftime('%B %Y')}"
 
-    def generate(self, application, company_name: str) -> Tuple[BytesIO, str]:
+    def format_date_professional(self, dt: datetime) -> str:
+        """Professional date format for certificates: e.g. 2 February 2026."""
+        if not hasattr(dt, "strftime"):
+            return str(dt)
+        return f"{dt.day} {dt.strftime('%B %Y')}"
+
+    def generate(
+        self,
+        application,
+        company_name: str,
+        renewal_token: Optional[str] = None,
+        is_expired: bool = False,
+    ) -> Tuple[BytesIO, str]:
         raw_type = application.certificate_type
         base_name = raw_type.value if hasattr(raw_type, 'value') else str(raw_type)
         if "CertificateType." in base_name:
@@ -113,9 +125,9 @@ class CertificateGenerator:
             
         # Use stored issued_date if available, else fallback to updated_at
         issued_at_date = application.issued_date or application.updated_at or datetime.now()
-        issued_date = self.format_date_ordinal(issued_at_date)
+        issued_date = self.format_date_professional(issued_at_date)
         
-        expiry_date = self.format_date_ordinal(application.expiry_date) if application.expiry_date else "N/A"
+        expiry_date = self.format_date_professional(application.expiry_date) if application.expiry_date else "N/A"
         
         financial_map = {
             "D1K1": "Over $500,000.00", "D2K2": "$200,000 - $500,000", "D3K3": "$75,000 - $200,000",
@@ -178,66 +190,26 @@ class CertificateGenerator:
             }
         }
 
-        # Draw each text element on the canvas as images (OCR-proof)
-        # Render text to PIL Images to prevent OCR scanning
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-            import textwrap
-            
-            for item in text_elements.values():
-                # Calculate text dimensions
-                font_size = int(item['size'] * 0.75)  # Convert points to pixels (approx)
-                text = item['text']
-                
-                # Create image with transparent background
-                # Estimate size: width based on text length, height based on font size
-                img_width = int(font_size * len(text) * 0.6)
-                img_height = int(font_size * 1.5)
-                img = Image.new('RGBA', (img_width, img_height), (255, 255, 255, 0))
-                draw = ImageDraw.Draw(img)
-                
-                # Try to load font, fallback to default
-                try:
-                    # Use default font (system font)
-                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-                except:
-                    try:
-                        font = ImageFont.load_default()
-                    except:
-                        font = None
-                
-                # Draw text on image
-                text_bbox = draw.textbbox((0, 0), text, font=font) if font else (0, 0, img_width, img_height)
-                text_x = (img_width - (text_bbox[2] - text_bbox[0])) / 2 if item['align'] == 'center' else 0
-                text_y = (img_height - (text_bbox[3] - text_bbox[1])) / 2
-                
-                draw.text((text_x, text_y), text, fill=(0, 0, 0, 255), font=font)
-                
-                # Convert to bytes and create ImageReader
-                img_bytes = BytesIO()
-                img.save(img_bytes, format='PNG', dpi=(300, 300))
-                img_bytes.seek(0)
-                img_reader = ImageReader(img_bytes)
-                
-                # Draw image on canvas
-                img_width_pts = sx(img_width * 0.75)  # Convert pixels to points
-                img_height_pts = sy(img_height * 0.75) - sy(0)
-                
-                if item['align'] == 'center':
-                    c.drawImage(img_reader, sx(item['x']) - img_width_pts/2, sy(item['y']) - img_height_pts, width=img_width_pts, height=img_height_pts)
-                else:
-                    c.drawImage(img_reader, sx(item['x']), sy(item['y']) - img_height_pts, width=img_width_pts, height=img_height_pts)
-        except Exception as e:
-            # Fallback to text rendering if image conversion fails
-            print(f"Warning: OCR-proof rendering failed, using text fallback: {e}")
-            for item in text_elements.values():
-                c.setFont(item['font'], item['size'])
-                if item['align'] == 'center':
-                    c.drawCentredString(sx(item['x']), sy(item['y']), item['text'])
-                else:
-                    c.drawString(sx(item['x']), sy(item['y']), item['text'])
+        center_x = width / 2
 
-        # 7) QR Code (x: 2118, y: 3202)
+        if is_expired:
+            # Expired certificate layout: SORRY / CERTIFICATE / HAS EXPIRED (blocky, prominent)
+            c.setFont(self.fonts["bold"], 36)
+            c.drawCentredString(center_x, sy(1550), "SORRY")
+            c.drawCentredString(center_x, sy(1480), "CERTIFICATE")
+            c.drawCentredString(center_x, sy(1410), "HAS EXPIRED")
+            c.setFont(self.fonts["regular"], 9)
+            c.drawCentredString(center_x, sy(1280), "CERTIFICATE HAS EXPIRED")
+        else:
+            # Normal certificate: draw all text elements
+            for item in text_elements.values():
+                c.setFont(item["font"], item["size"])
+                if item["align"] == "center":
+                    c.drawCentredString(sx(item["x"]), sy(item["y"]), item["text"])
+                else:
+                    c.drawString(sx(item["x"]), sy(item["y"]), item["text"])
+
+        # QR Code (x: 2118, y: 3202)
         # Use security token for verification if available (XSCNS), else legacy ID
         if getattr(application, "security_token", None):
              verify_url = f"{settings.FRONTEND_URL}/verify/cert/{application.security_token}"
@@ -249,6 +221,24 @@ class CertificateGenerator:
         qr_size = sx(300)
         c.drawImage(qr_img, sx(2118), sy(3202) - qr_size, width=qr_size, height=qr_size)
 
+        # Renewal link under signatures: show "RENEW NOW" in blocky style; click opens renewal URL
+        if renewal_token:
+            renewal_url = f"{settings.FRONTEND_URL}/renewal?token={renewal_token}"
+            c.setFont(self.fonts["bold"], 22)
+            c.setFillColorRGB(0.35, 0.35, 0.35)  # grey to match stencil/expired text
+            renew_text = "RENEW NOW"
+            y_renew = sy(600)
+            c.drawCentredString(center_x, y_renew, renew_text)
+            # Make the "RENEW NOW" text a clickable link (same URL as before)
+            text_w = c.stringWidth(renew_text, self.fonts["bold"], 22)
+            half_w = text_w / 2
+            c.linkURL(
+                renewal_url,
+                (center_x - half_w, y_renew - 22, center_x + half_w, y_renew + 4),
+                relative=0,
+            )
+            c.setFillColorRGB(0, 0, 0)
+
         c.save(); overlay_buffer.seek(0)
         overlay_reader = PdfReader(overlay_buffer); overlay_page = overlay_reader.pages[0]
         page_orig.merge_page(overlay_page)
@@ -257,19 +247,32 @@ class CertificateGenerator:
         output_buffer = BytesIO()
         writer = PdfWriter()
         writer.add_page(page_orig)
+
+        # Option A: PDF permissions – no password to open, restrict copying/text selection
+        # Viewers that honour permissions will prevent text selection and content copy
+        owner_pwd = getattr(settings, "CERTIFICATE_OWNER_PASSWORD", None) or "mwhwr-cert-secure"
+        try:
+            # permissions_flag: allow print and read; disable copy/extract (clear bit 5 = 32)
+            no_copy_flag = 0xFFFFFFFC & ~32
+            writer.encrypt(
+                user_password="",
+                owner_password=owner_pwd,
+                permissions_flag=no_copy_flag,
+                algorithm="AES-256",
+            )
+        except Exception:
+            try:
+                writer.encrypt(user_password="", owner_password=owner_pwd)
+            except Exception:
+                pass
+
         writer.write(output_buffer)
         output_buffer.seek(0)
-        
+
         # Generate SHA-256 hash for tamper detection
-        # Any modification to the PDF (even if reverted) will change this hash
         pdf_bytes = output_buffer.read()
         pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
-        
-        # Reset buffer for return
         output_buffer.seek(0)
-        
-        # Return both PDF and hash
-        # Hash is stored in database - any mismatch indicates tampering
         return output_buffer, pdf_hash
 
 certificate_generator = CertificateGenerator()

@@ -1,5 +1,6 @@
 import httpx
 import os
+import tempfile
 from typing import List, Dict, Any, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -8,6 +9,18 @@ from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
 from app.core.config import settings
+
+# Optional: local PDF + OCR (scanned/image pages)
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract = None
+    Image = None
 
 
 class PDFAnalysisService:
@@ -24,20 +37,39 @@ class PDFAnalysisService:
         use_ocr: bool = True,
         extract_tables: bool = True,
         extract_forms: bool = False,
-        languages: List[str] = None
+        languages: List[str] = None,
+        application_company_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         if languages is None:
             languages = ["eng"]
         
+        documents: List[Document] = []
         try:
-            documents = await self._load_document(
-                document_url=document_url,
-                strategy=strategy,
-                use_ocr=use_ocr,
-                extract_tables=extract_tables,
-                extract_forms=extract_forms,
-                languages=languages
-            )
+            if self.unstructured_api_key:
+                documents = await self._load_document(
+                    document_url=document_url,
+                    strategy=strategy,
+                    use_ocr=use_ocr,
+                    extract_tables=extract_tables,
+                    extract_forms=extract_forms,
+                    languages=languages
+                )
+            if not documents and fitz:
+                documents = await self._load_document_local(
+                    document_url=document_url,
+                    use_ocr=use_ocr,
+                )
+        except Exception:
+            if fitz:
+                try:
+                    documents = await self._load_document_local(
+                        document_url=document_url,
+                        use_ocr=use_ocr,
+                    )
+                except Exception:
+                    pass
+        
+        try:
             
             if not documents:
                 return {
@@ -52,11 +84,24 @@ class PDFAnalysisService:
             analysis = await self._analyze_content(
                 extracted_text=extracted_text,
                 document_type=document_type,
-                documents=documents
+                documents=documents,
+                application_company_name=application_company_name,
             )
             
             tables = self._extract_tables(documents)
             forms = self._extract_forms(documents) if extract_forms else []
+            
+            # Parse company match guard from analysis (LLM outputs COMPANY_MATCH: YES or COMPANY_MISMATCH: ...)
+            company_match: Optional[bool] = None
+            company_match_detail: Optional[str] = None
+            if application_company_name and isinstance(analysis, str):
+                if "COMPANY_MISMATCH:" in analysis:
+                    company_match = False
+                    idx = analysis.find("COMPANY_MISMATCH:")
+                    end = analysis.find("\n", idx)
+                    company_match_detail = (analysis[idx:end] if end != -1 else analysis[idx:]).strip()
+                elif "COMPANY_MATCH: YES" in analysis or "COMPANY_MATCH:YES" in analysis:
+                    company_match = True
             
             return {
                 "success": True,
@@ -69,7 +114,9 @@ class PDFAnalysisService:
                     "strategy": strategy,
                     "pages_processed": len(documents),
                     "total_chars": len(extracted_text)
-                }
+                },
+                "company_match": company_match,
+                "company_match_detail": company_match_detail,
             }
             
         except Exception as e:
@@ -138,6 +185,58 @@ class PDFAnalysisService:
             
             return documents
     
+    async def _load_document_local(
+        self,
+        document_url: str,
+        use_ocr: bool = True,
+    ) -> List[Document]:
+        """Extract text from PDF using PyMuPDF; for pages with little/no text, run OCR (pytesseract). Handles scanned/image-only PDFs."""
+        if not fitz:
+            return []
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.get(document_url)
+            response.raise_for_status()
+            pdf_bytes = response.content
+        if not pdf_bytes:
+            return []
+        documents = []
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            try:
+                tmp.write(pdf_bytes)
+                tmp.flush()
+                doc = fitz.open(tmp.name)
+                try:
+                    for page_no in range(len(doc)):
+                        page = doc[page_no]
+                        text = (page.get_text() or "").strip()
+                        if use_ocr and len(text) < 50 and pytesseract and Image:
+                            mat = fitz.Matrix(2.0, 2.0)
+                            pix = page.get_pixmap(matrix=mat, alpha=False)
+                            img = Image.frombytes(
+                                "RGB", [pix.width, pix.height], pix.samples
+                            )
+                            text = (pytesseract.image_to_string(img) or "").strip()
+                        if text:
+                            documents.append(
+                                Document(
+                                    page_content=text,
+                                    metadata={
+                                        "type": "Page",
+                                        "page_number": page_no + 1,
+                                        "filename": os.path.basename(document_url),
+                                        "filetype": "pdf",
+                                    },
+                                )
+                            )
+                finally:
+                    doc.close()
+            finally:
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+        return documents
+    
     def _combine_documents(self, documents: List) -> str:
         return "\n\n".join([doc.page_content for doc in documents if doc.page_content])
     
@@ -166,12 +265,13 @@ class PDFAnalysisService:
         self,
         extracted_text: str,
         document_type: str,
-        documents: List
+        documents: List,
+        application_company_name: Optional[str] = None,
     ) -> str:
         if not self.openai_api_key:
             return "OpenAI API key not configured. Analysis unavailable."
         
-        if not extracted_text or len(extracted_text.strip()) < 100:
+        if not extracted_text or len(extracted_text.strip()) < 50:
             return "Insufficient text extracted from document for analysis."
         
         try:
@@ -196,9 +296,19 @@ class PDFAnalysisService:
                 openai_api_key=self.openai_api_key
             )
             
-            prompt_template = PromptTemplate(
-                input_variables=["context", "document_type"],
-                template="""Analyze this {document_type} document for completeness, accuracy, and compliance with ministry requirements.
+            company_guard = ""
+            if application_company_name:
+                company_guard = """
+CRITICAL - Company name verification (mandatory):
+This document is being reviewed for an application submitted on behalf of the company: "{application_company_name}".
+- Extract ALL company names mentioned in the document (e.g. on certificates, letterheads, forms).
+- If the document clearly refers to a DIFFERENT company (different name) than the application company above, you MUST output exactly one line at the END of your analysis: COMPANY_MISMATCH: The document refers to [company name(s) from document] which does not match the application company ({application_company_name}). This document does not belong to this application.
+- If the document clearly refers to the SAME company (or the same legal entity) as the application company, output at the END: COMPANY_MATCH: YES
+- Do not approve or state that the document is compliant if there is a company name mismatch; treat mismatch as a critical compliance failure.
+"""
+            
+            template_str = """Analyze this {document_type} document for completeness, accuracy, and compliance with ministry requirements.
+{company_guard}
 
 Extract and verify:
 - Company details (name, registration number, address)
@@ -211,7 +321,11 @@ Extract and verify:
 Document Content:
 {context}
 
-Provide a comprehensive analysis focusing on compliance, completeness, and any issues that need attention."""
+Provide a comprehensive analysis focusing on compliance, completeness, and any issues that need attention. At the end, you MUST output either COMPANY_MATCH: YES or COMPANY_MISMATCH: [reason] as specified above if an application company name was provided."""
+            template_str = template_str.replace("{company_guard}", company_guard if application_company_name else "").replace("{application_company_name}", application_company_name or "")
+            prompt_template = PromptTemplate(
+                input_variables=["context", "document_type"],
+                template=template_str,
             )
             
             qa_chain = RetrievalQA.from_chain_type(

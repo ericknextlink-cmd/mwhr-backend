@@ -1,3 +1,4 @@
+import json
 from typing import List, Union
 from pathlib import Path
 from pydantic import AnyHttpUrl, field_validator
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     FRONTEND_URL: str = "http://localhost:3000"
+    # Optional: owner password for certificate PDF encryption (restricts copy/text selection)
+    CERTIFICATE_OWNER_PASSWORD: str | None = None
     
     # Email
     EMAILS_ENABLED: bool = False
@@ -37,15 +40,22 @@ class Settings(BaseSettings):
     UNSTRUCTURED_API_URL: str | None = "https://api.unstructured.io"
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
+    BACKEND_CORS_ORIGINS: List[Union[AnyHttpUrl, str]] = []
 
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
+        if isinstance(v, str):
+            v = v.strip().strip("'\"")
+            if v.startswith("["):
+                try:
+                    v = json.loads(v)
+                except json.JSONDecodeError:
+                    v = [x.strip() for x in v.strip("[]").split(",")]
+            else:
+                v = [x.strip() for x in v.split(",")]
+        if isinstance(v, list):
+            return [str(x).strip().rstrip("/") for x in v if x]
+        return []
 
     # Use .env file if it exists, otherwise rely on environment variables
     _env_file = Path(__file__).resolve().parent.parent.parent / ".env"

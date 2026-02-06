@@ -15,44 +15,53 @@ class StorageService:
             )
         self.bucket_name = settings.SUPABASE_BUCKET_NAME
 
-    async def upload_file(self, file: UploadFile, user_id, application_certificate_type: str) -> str:
+    async def upload_file(self, file: UploadFile, application_id: int) -> str:
         """
-        Uploads a file to Supabase Storage.
+        Uploads a file to Supabase Storage under the application folder.
         Returns the storage path (key).
-        user_id: UUID of the user
-        application_certificate_type: Certificate type (e.g., "electrical", "building", "plumbing")
+        Path: applications/{application_id}/documents/{filename}
         """
         if not self.client:
             raise HTTPException(status_code=500, detail="Storage service not configured.")
 
-        # 1. Sanitize filename
         file_ext = file.filename.split(".")[-1]
         unique_id = str(uuid.uuid4())
         clean_filename = f"{unique_id}.{file_ext}"
 
-        # 2. Create path: user_{uuid}/{certificate_type}/{filename}
-        # Organized by User -> Certificate Type (not application ID)
-        file_path = f"user_{user_id}/{application_certificate_type}/{clean_filename}"
+        file_path = f"applications/{application_id}/documents/{clean_filename}"
 
-        # 3. Read file content
         file_content = await file.read()
-        
-        # 4. Upload
         try:
-            # Supabase Python client 'upload' is synchronous (requests based)
-            # For high throughput, might want to run in executor, but for now this is fine.
-            res = self.client.storage.from_(self.bucket_name).upload(
+            self.client.storage.from_(self.bucket_name).upload(
                 file_path,
                 file_content,
-                {"content-type": file.content_type}
+                {"content-type": file.content_type or "application/octet-stream"}
             )
-            # Reset cursor for subsequent reads if any
-            await file.seek(0) 
-            
+            await file.seek(0)
             return file_path
         except Exception as e:
             print(f"Storage Upload Error: {e}")
             raise HTTPException(status_code=500, detail="Failed to upload file to storage.")
+
+    def upload_certificate(self, pdf_bytes: bytes, application_id: int, filename: str) -> str:
+        """
+        Uploads a generated certificate PDF to Supabase Storage.
+        Path: applications/{application_id}/certifications/{filename}
+        Returns the storage path (key).
+        """
+        if not self.client:
+            return ""
+        file_path = f"applications/{application_id}/certifications/{filename}"
+        try:
+            self.client.storage.from_(self.bucket_name).upload(
+                file_path,
+                pdf_bytes,
+                {"content-type": "application/pdf"}
+            )
+            return file_path
+        except Exception as e:
+            print(f"Storage Certificate Upload Error: {e}")
+            return ""
 
     def get_signed_url(self, file_path: str, expiry_seconds: int = 3600) -> str:
         """

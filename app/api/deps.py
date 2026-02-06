@@ -1,3 +1,4 @@
+import uuid
 from typing import Generator
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -32,8 +33,13 @@ async def get_current_user(
     
     if not token_data.sub:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    user = await session.get(User, int(token_data.sub))
+
+    # User ID is UUID (JWT sub is string representation)
+    try:
+        user_id = uuid.UUID(token_data.sub)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=403, detail="Invalid token subject")
+    user = await session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if not user.is_active:

@@ -2,6 +2,7 @@ from typing import List, Any, Optional
 from datetime import datetime, timedelta
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from sqlmodel import select, func, col, desc, asc, or_
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload # Import selectinload
@@ -26,6 +27,7 @@ class AdminApplicationDetails(ApplicationRead):
     directors: List[DirectorRead] = []
     documents: List[DocumentRead] = []
     reviewer_email: Optional[str] = None # For frontend display
+    ai_analysis: Optional[dict] = None  # Stored AI analysis result (load on page, avoid duplicate runs)
 
 # --- Existing Endpoints ---
 
@@ -192,6 +194,7 @@ async def get_application_details_for_admin(
     details = AdminApplicationDetails.from_orm(result)
     if result.reviewer:
         details.reviewer_email = result.reviewer.email
+    details.ai_analysis = getattr(result, "ai_analysis_json", None)
         
     # Convert document storage paths to signed URLs for secure access
     if details.documents:
@@ -202,6 +205,31 @@ async def get_application_details_for_admin(
                     doc.file_url = signed_url
         
     return details
+
+
+class SaveAnalysisRequest(BaseModel):
+    analysis: dict  # Full analysis result JSON from frontend
+
+
+@router.patch("/applications/{id}/analysis")
+async def save_application_analysis(
+    id: int,
+    body: SaveAnalysisRequest,
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_active_admin),
+):
+    """
+    Store AI analysis result for an application. Avoids re-running analysis;
+    when the admin page loads, existing analysis is shown and the button becomes "Run new analysis".
+    """
+    application = await session.get(Application, id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    application.ai_analysis_json = body.analysis
+    session.add(application)
+    await session.commit()
+    return {"ok": True, "message": "Analysis saved."}
+
 
 @router.patch("/applications/{id}/status", response_model=ApplicationRead)
 async def update_application_status(

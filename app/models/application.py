@@ -1,8 +1,9 @@
-from typing import Optional, TYPE_CHECKING, List
+from typing import Optional, TYPE_CHECKING, List, Any, Dict
 from enum import Enum
 from datetime import datetime
 import uuid
-from sqlmodel import Field, Relationship, SQLModel
+from sqlmodel import Field, Relationship, SQLModel, Column
+from sqlalchemy.types import JSON
 
 if TYPE_CHECKING:
     from app.models.company_info import CompanyInfo
@@ -64,6 +65,9 @@ class Application(ApplicationBase, table=True):
     directors: List["Director"] = Relationship(back_populates="application")
     
     documents: List["Document"] = Relationship(back_populates="application")
+
+    # Stored AI analysis result (avoids re-running analysis; one canonical result per application)
+    ai_analysis_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON, nullable=True))
 
 class ApplicationCreate(ApplicationBase):
     pass
