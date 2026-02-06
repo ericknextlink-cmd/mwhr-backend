@@ -8,24 +8,62 @@ alembic
 python-multipart
 python-jose[cryptography]
 passlib[bcrypt]
-email-validator
-pypdf
 argon2-cffi
-pytest
+email-validator
 httpx
-pytest-asyncio
 fastapi-mail
 supabase
 reportlab
 qrcode
 pillow
 resend
+
+# PDFs / OCR
+pypdf
+pymupdf
+pytesseract
+
+# LLM tooling (lightweight)
 langchain
 langchain-community
 langchain-openai
 langchain-text-splitters
-unstructured[pdf]
 openai
+
+# Vector DB (still heavy, but manageable)
 chromadb
-pymupdf
-pytesseract
+
+
+
+
+# fastapi
+# uvicorn[standard]
+# sqlmodel
+# asyncpg
+# python-dotenv
+# pydantic-settings
+# alembic
+# python-multipart
+# python-jose[cryptography]
+# passlib[bcrypt]
+# email-validator
+# pypdf
+# argon2-cffi
+# pytest
+# httpx
+# pytest-asyncio
+# fastapi-mail
+# supabase
+# reportlab
+# qrcode
+# pillow
+# resend
+# langchain
+# langchain-community
+# langchain-openai
+# langchain-text-splitters
+# unstructured[pdf]
+# openai
+# chromadb
+# pymupdf
+# pytesseract
