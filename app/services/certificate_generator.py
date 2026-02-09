@@ -82,6 +82,7 @@ class CertificateGenerator:
         company_name: str,
         renewal_token: Optional[str] = None,
         is_expired: bool = False,
+        certificate_open_password: Optional[str] = None,
     ) -> Tuple[BytesIO, str]:
         raw_type = application.certificate_type
         base_name = raw_type.value if hasattr(raw_type, 'value') else str(raw_type)
@@ -248,21 +249,21 @@ class CertificateGenerator:
         writer = PdfWriter()
         writer.add_page(page_orig)
 
-        # Option A: PDF permissions – no password to open, restrict copying/text selection
-        # Viewers that honour permissions will prevent text selection and content copy
+        # PDF encryption: optional open password (user-provided at generation time, hashed in DB);
+        # owner password from env restricts copy/edit in viewers that support it.
+        user_pwd = certificate_open_password if certificate_open_password else ""
         owner_pwd = getattr(settings, "CERTIFICATE_OWNER_PASSWORD", None) or "mwhwr-cert-secure"
         try:
-            # permissions_flag: allow print and read; disable copy/extract (clear bit 5 = 32)
             no_copy_flag = 0xFFFFFFFC & ~32
             writer.encrypt(
-                user_password="",
+                user_password=user_pwd,
                 owner_password=owner_pwd,
                 permissions_flag=no_copy_flag,
                 algorithm="AES-256",
             )
         except Exception:
             try:
-                writer.encrypt(user_password="", owner_password=owner_pwd)
+                writer.encrypt(user_password=user_pwd, owner_password=owner_pwd)
             except Exception:
                 pass
 

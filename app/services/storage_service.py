@@ -63,6 +63,26 @@ class StorageService:
             print(f"Storage Certificate Upload Error: {e}")
             return ""
 
+    def upload_invoice(self, pdf_bytes: bytes, application_id: int, filename: str) -> str:
+        """
+        Uploads generated invoice PDF (2-page letter + invoice) to Supabase Storage.
+        Path: applications/{application_id}/invoices/{filename}
+        Returns the storage path (key).
+        """
+        if not self.client:
+            return ""
+        file_path = f"applications/{application_id}/invoices/{filename}"
+        try:
+            self.client.storage.from_(self.bucket_name).upload(
+                file_path,
+                pdf_bytes,
+                {"content-type": "application/pdf"}
+            )
+            return file_path
+        except Exception as e:
+            print(f"Storage Invoice Upload Error: {e}")
+            return ""
+
     def get_signed_url(self, file_path: str, expiry_seconds: int = 3600) -> str:
         """
         Generates a temporary signed URL for a file.

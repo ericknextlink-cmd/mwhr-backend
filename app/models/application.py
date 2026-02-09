@@ -45,6 +45,7 @@ class Application(ApplicationBase, table=True):
     internal_uid: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, unique=True, nullable=False)
     security_token: Optional[str] = Field(default=None, index=True)
     certificate_pdf_hash: Optional[str] = Field(default=None, index=True) # SHA-256 hash for tamper detection
+    certificate_open_password_hash: Optional[str] = Field(default=None) # Argon2 hash of password to open PDF; we never have access to Supabase user password hash
 
     # Foreign Key to User (Applicant)
     user_id: Optional[uuid.UUID] = Field(default=None, foreign_key="user.id")

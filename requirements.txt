@@ -16,6 +16,7 @@ supabase
 reportlab
 qrcode
 pillow
+python-barcode
 resend
 
 # PDFs / OCR

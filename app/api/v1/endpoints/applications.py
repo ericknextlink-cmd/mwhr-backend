@@ -14,8 +14,9 @@ from app.models.user import User
 from app.models.company_info import CompanyInfo
 from app.models.director import Director
 from app.models.document import Document
-from app.core.security import create_renewal_token, decode_renewal_token
+from app.core.security import create_renewal_token, decode_renewal_token, get_password_hash, verify_password
 from app.services.certificate_generator import certificate_generator
+from app.services.invoice_pdf_generator import invoice_pdf_generator
 from app.services.notification_service import notify_admins
 from app.services.otp_store import otp_store
 from app.services.storage_service import storage_service
@@ -30,6 +31,7 @@ class ApplicationVerifyResponse(BaseModel):
     id: int
     status: str
     certificate_type: str
+    certificate_number: str | None
     company_name: str
     expiry_date: datetime | None
     company_address: str | None
@@ -123,14 +125,121 @@ async def verify_certificate(
         "id": application.id,
         "status": application.status,
         "certificate_type": application.certificate_type,
+        "certificate_number": application.certificate_number,
         "company_name": application.company_info.company_name if application.company_info else "Unknown",
         "company_address": application.company_info.address if application.company_info else "Unknown",
-        "expiry_date": application.expiry_date
+        "expiry_date": application.expiry_date,
     }
+
+
+async def _build_certificate_response(
+    application: Application,
+    certificate_password: str | None,
+    session: AsyncSession,
+) -> tuple[Application, str, StreamingResponse]:
+    """Shared logic: resolve open password (verify or set hash), generate PDF if needed; returns (application, filename, response)."""
+    company_clean = application.company_info.company_name.replace(" ", "_")
+    type_clean = application.certificate_type.replace(" ", "_")
+    class_clean = (application.certificate_class or "N/A").replace(" ", "_")
+    filename = f"{company_clean}_{type_clean}_{class_clean}_{application.id}.pdf"
+    cert_path = f"applications/{application.id}/certifications/{filename}"
+
+    now_utc = datetime.now(timezone.utc)
+    app_expiry = application.expiry_date
+    if app_expiry and getattr(app_expiry, "tzinfo", None) is None:
+        app_expiry = app_expiry.replace(tzinfo=timezone.utc)
+    is_expired = bool(application.expiry_date and app_expiry and app_expiry < now_utc)
+    renewal_token = create_renewal_token(application.id)
+
+    open_password: str | None = None
+    if application.certificate_open_password_hash:
+        if not certificate_password:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Certificate is password-protected; provide certificate_password to download.",
+            )
+        if not verify_password(certificate_password, application.certificate_open_password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid certificate password.",
+            )
+        open_password = certificate_password
+    elif certificate_password:
+        application.certificate_open_password_hash = get_password_hash(certificate_password)
+        open_password = certificate_password
+        session.add(application)
+        await session.commit()
+
+    existing_pdf = None if (is_expired or open_password) else storage_service.download_file(cert_path)
+    if existing_pdf:
+        return (application, filename, StreamingResponse(
+            BytesIO(existing_pdf),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        ))
+
+    pdf_buffer, pdf_hash = certificate_generator.generate(
+        application,
+        application.company_info.company_name,
+        renewal_token=renewal_token,
+        is_expired=is_expired,
+        certificate_open_password=open_password,
+    )
+    if not application.certificate_pdf_hash:
+        application.certificate_pdf_hash = pdf_hash
+        session.add(application)
+        await session.commit()
+
+    pdf_bytes = pdf_buffer.getvalue()
+    storage_service.upload_certificate(pdf_bytes, application.id, filename)
+    pdf_buffer.seek(0)
+    return (application, filename, StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    ))
+
+
+@router.get("/public/certificate/{identifier}")
+async def download_certificate_public(
+    identifier: str,
+    token: str,
+    certificate_password: str | None = None,
+    session: AsyncSession = Depends(deps.get_session),
+):
+    """
+    Public certificate download after OTP verification.
+    Use same identifier as verify (certificate number, security token, or application ID).
+    Optional certificate_password: if cert is password-protected, required; otherwise sets open password for this download.
+    """
+    if not otp_store.is_token_valid(token):
+        raise HTTPException(status_code=401, detail="Verification session expired. Please verify phone number again.")
+
+    conditions = [
+        Application.certificate_number == identifier,
+        Application.security_token == identifier,
+    ]
+    if identifier.isdigit():
+        conditions.append(Application.id == int(identifier))
+    query = select(Application).where(or_(*conditions)).options(selectinload(Application.company_info))
+    result = await session.exec(query)
+    application = result.first()
+
+    if not application:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    if application.status != ApplicationStatus.APPROVED and application.status != ApplicationStatus.SUSPENDED:
+        raise HTTPException(status_code=404, detail="Certificate not available for download")
+    if not application.company_info:
+        raise HTTPException(status_code=400, detail="Company information missing.")
+
+    _, _, response = await _build_certificate_response(application, certificate_password, session)
+    return response
+
 
 @router.get("/{id}/certificate")
 async def generate_certificate(
     id: int,
+    certificate_password: str | None = None,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_user),
 ):
@@ -159,50 +268,36 @@ async def generate_certificate(
     if not application.company_info:
         raise HTTPException(status_code=400, detail="Company information missing.")
 
-    # Filename for download and storage
-    company_clean = application.company_info.company_name.replace(" ", "_")
-    type_clean = application.certificate_type.replace(" ", "_")
-    class_clean = (application.certificate_class or "N/A").replace(" ", "_")
-    filename = f"{company_clean}_{type_clean}_{class_clean}_{application.id}.pdf"
-    cert_path = f"applications/{application.id}/certifications/{filename}"
+    _, _, response = await _build_certificate_response(application, certificate_password, session)
+    return response
 
-    now_utc = datetime.now(timezone.utc)
-    app_expiry = application.expiry_date
-    if app_expiry and getattr(app_expiry, "tzinfo", None) is None:
-        app_expiry = app_expiry.replace(tzinfo=timezone.utc)
-    is_expired = bool(application.expiry_date and app_expiry and app_expiry < now_utc)
-    renewal_token = create_renewal_token(application.id)
 
-    # For expired certs always regenerate so PDF shows expired layout and renewal link
-    existing_pdf = None if is_expired else storage_service.download_file(cert_path)
-    if existing_pdf:
-        return StreamingResponse(
-            BytesIO(existing_pdf),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-
-    # Generate PDF (with optional expired layout and renewal link)
-    pdf_buffer, pdf_hash = certificate_generator.generate(
-        application,
-        application.company_info.company_name,
-        renewal_token=renewal_token,
-        is_expired=is_expired,
-    )
-    if not application.certificate_pdf_hash:
-        application.certificate_pdf_hash = pdf_hash
-        session.add(application)
-        await session.commit()
-
-    pdf_bytes = pdf_buffer.getvalue()
-    storage_service.upload_certificate(pdf_bytes, application.id, filename)
-    pdf_buffer.seek(0)
-
+@router.get("/{id}/invoice")
+async def get_invoice_pdf(
+    id: int,
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    Download the 2-page invoice PDF (letter + invoice) generated after payment.
+    Only for the application owner or superuser.
+    """
+    result = await session.exec(select(Application).where(Application.id == id))
+    application = result.first()
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if not current_user.is_superuser and application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    path = f"applications/{id}/invoices/invoice.pdf"
+    pdf_bytes = storage_service.download_file(path)
+    if not pdf_bytes:
+        raise HTTPException(status_code=404, detail="Invoice not found. It is generated after payment.")
     return StreamingResponse(
-        pdf_buffer,
+        BytesIO(pdf_bytes),
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": 'attachment; filename="invoice.pdf"'},
     )
+
 
 @router.get("/reusable", response_model=List[ApplicationRead])
 async def get_reusable_applications(
@@ -551,10 +646,23 @@ async def bulk_pay_applications(
         updated_apps.append(app)
 
     await session.commit()
-    
+
+    # Generate 2-page invoice PDF (letter + invoice) for each paid application and upload to storage
     for app in updated_apps:
         await session.refresh(app)
-        
+        try:
+            result = await session.exec(
+                select(Application).where(Application.id == app.id).options(selectinload(Application.company_info))
+            )
+            app_with_company = result.one()
+            pdf_buffer, invoice_number = invoice_pdf_generator.generate(
+                app_with_company, app_with_company.company_info
+            )
+            pdf_bytes = pdf_buffer.getvalue()
+            storage_service.upload_invoice(pdf_bytes, app.id, "invoice.pdf")
+        except Exception as e:
+            print(f"Invoice PDF generation failed for application {app.id}: {e}")
+
     return updated_apps
 
 @router.get("/{id}/details", response_model=ApplicationDetailsResponse)

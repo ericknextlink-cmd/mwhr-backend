@@ -23,6 +23,15 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:3000"
     # Optional: owner password for certificate PDF encryption (restricts copy/text selection)
     CERTIFICATE_OWNER_PASSWORD: str | None = None
+
+    # Invoice PDF (post-payment letter + invoice)
+    INVOICE_APPLICATION_FEE_GHS: float = 1000.0
+    INVOICE_PROCESSING_FEE_GHS: float = 500.0
+    INVOICE_PAYMENT_DAYS_DUE: int = 7
+    MINISTRY_NAME: str = "Ministry of Works, Housing & Water Resources"
+    MINISTRY_ADDRESS: str = "Ministries Area, Off Starlets 91 Road, Accra, Ghana, P.O. Box M43, Ministries - Accra, Digital Address: GA-144-0550"
+    MINISTRY_PHONE: str = "+233 (0)577 902 988 / +233 (0)577 902 933"
+    MINISTRY_EMAIL: str = "info@mwhwr.gov.gh"
     
     # Email
     EMAILS_ENABLED: bool = False
