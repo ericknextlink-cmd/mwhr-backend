@@ -20,6 +20,7 @@ from app.services.invoice_pdf_generator import invoice_pdf_generator
 from app.services.notification_service import notify_admins
 from app.services.otp_store import otp_store
 from app.services.storage_service import storage_service
+from app.services.email_service import send_invoice_email
 
 router = APIRouter()
 
@@ -647,7 +648,7 @@ async def bulk_pay_applications(
 
     await session.commit()
 
-    # Generate 2-page invoice PDF (letter + invoice) for each paid application and upload to storage
+    # Generate 2-page invoice PDF (letter + invoice), upload to storage, and email to applicant
     for app in updated_apps:
         await session.refresh(app)
         try:
@@ -660,6 +661,17 @@ async def bulk_pay_applications(
             )
             pdf_bytes = pdf_buffer.getvalue()
             storage_service.upload_invoice(pdf_bytes, app.id, "invoice.pdf")
+
+            # Send invoice to applicant's email
+            if app.user_id:
+                user = await session.get(User, app.user_id)
+                if user and user.email:
+                    await send_invoice_email(
+                        email_to=user.email,
+                        applicant_name=user.email.split("@")[0] if user.email else "Applicant",
+                        application_id=app.id,
+                        pdf_bytes=pdf_bytes,
+                    )
         except Exception as e:
             print(f"Invoice PDF generation failed for application {app.id}: {e}")
 
