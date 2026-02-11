@@ -155,7 +155,7 @@ class InvoicePdfGenerator:
         c.drawString(self.margin_left, y, "Thank you for your cooperation.")
         y -= 40
 
-        c.setFont(self.font_small, self.font_size_small)
+        c.setFont(self.font_regular, self.font_size_small)
         c.drawString(self.margin_left, y, "Issued By:")
         c.drawString(self.margin_left, y - 10, "Certificate Processing Unit")
         c.drawString(self.margin_left, y - 20, "Ministry of Works, Housing and Water Resources (MWHWR)")
@@ -337,7 +337,3 @@ class InvoicePdfGenerator:
 
 
 invoice_pdf_generator = InvoicePdfGenerator()
-</think>
-Fixing a typo (font_small → font_regular) and adding barcode drawing to both pages.
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-StrReplace
