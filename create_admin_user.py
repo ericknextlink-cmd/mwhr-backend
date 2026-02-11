@@ -22,8 +22,9 @@ async def create_admin_user(email: str, password: str):
 
         if user:
             print(f"User with email {email} already exists.")
-            if not user.is_superuser:
+            if not user.is_superuser or not user.is_verified:
                 user.is_superuser = True
+                user.is_verified = True
                 user.role = UserRole.SUPER_ADMIN
                 session.add(user)
                 await session.commit()
@@ -38,6 +39,7 @@ async def create_admin_user(email: str, password: str):
             email=email,
             hashed_password=hashed_password,
             is_active=True,
+            is_verified=True,
             is_superuser=True,
             role=UserRole.SUPER_ADMIN
         )

@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     UNSTRUCTURED_API_KEY: str | None = None
     UNSTRUCTURED_API_URL: str | None = "https://api.unstructured.io"
+    
+    # AI Microservice (External)
+    AI_SERVICE_URL: str | None = None
+    AI_SERVICE_API_KEY: str | None = None
 
     # CORS
     BACKEND_CORS_ORIGINS: List[Union[AnyHttpUrl, str]] = []

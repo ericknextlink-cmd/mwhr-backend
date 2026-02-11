@@ -20,7 +20,7 @@ async def check_users():
         print("-" * 60)
         
         for user in users:
-            print(f"{user.id:<5} | {user.email:<30} | {str(user.is_active):<10} | {str(user.is_superuser):<12}")
+            print(f"{str(user.id):<5} | {user.email:<30} | {str(user.is_active):<10} | {str(user.is_superuser):<12}")
         print("-" * 60)
 
 if __name__ == "__main__":
