@@ -337,7 +337,3 @@ class InvoicePdfGenerator:
 
 
 invoice_pdf_generator = InvoicePdfGenerator()
-</think>
-Fixing a typo (font_small → font_regular) and adding barcode drawing to both pages.
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-StrReplace
