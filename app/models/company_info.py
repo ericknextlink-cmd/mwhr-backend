@@ -18,7 +18,7 @@ class CompanyInfo(CompanyInfoBase, table=True):
     application: "Application" = Relationship(back_populates="company_info")
 
 class CompanyInfoCreate(CompanyInfoBase):
-    application_id: int
+    application_id: str  # UUID (internal_uid) of the application
 
 class CompanyInfoRead(CompanyInfoBase):
     id: int

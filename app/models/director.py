@@ -16,7 +16,7 @@ class Director(DirectorBase, table=True):
     application: "Application" = Relationship(back_populates="directors")
 
 class DirectorCreate(DirectorBase):
-    application_id: int
+    application_id: str  # UUID (internal_uid) of the application
 
 class DirectorRead(DirectorBase):
     id: int

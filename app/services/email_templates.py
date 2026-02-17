@@ -4,8 +4,8 @@ Logo uses hosted URL so it loads reliably in email clients.
 """
 from typing import Optional
 
-# Hosted logo – use URL so it displays in email inbox (no local file path)
-LOGO_URL = "https://verify-mwhwr.vercel.app/_next/image?url=%2Fministry-1.png&w=1920&q=75"
+# Hosted logo – use URL so it displays in email inbox (no local file path). Smaller width for email layout.
+LOGO_URL = "https://verify-mwhwr.vercel.app/_next/image?url=%2Fministry-1.png&w=384&q=75"
 
 
 def wrap_email_body(
@@ -18,19 +18,21 @@ def wrap_email_body(
     Wrap content in the shared layout: logo, responsive container, light/dark theme.
     body_html is inserted inside the main content area; optional CTA button below.
     """
+    # Use fixed purple + white for buttons so they're visible in all clients (Gmail etc. often ignore CSS variables)
     button_block = ""
     if button_text and button_link:
         button_block = f"""
         <p style="margin: 24px 0 0 0;">
-          <a href="{button_link}" class="btn-primary" style="
+          <a href="{button_link}" style="
             display: inline-block;
             padding: 12px 24px;
-            background: var(--accent);
-            color: #fff !important;
+            background-color: #033783;
+            color: #ffffff !important;
             text-decoration: none;
             border-radius: 8px;
             font-weight: 600;
             font-size: 16px;
+            border: 1px solid #033783;
           ">{button_text}</a>
         </p>
         """
@@ -117,7 +119,7 @@ def wrap_email_body(
 </head>
 <body>
   <div class="wrapper">
-    <img src="{LOGO_URL}" alt="Ministry of Works, Housing &amp; Water Resources" class="logo" width="280" height="auto" style="max-width:280px;height:auto;" />
+    <img src="{LOGO_URL}" alt="Ministry of Works, Housing &amp; Water Resources" class="logo" width="160" height="auto" style="max-width:160px;height:auto;display:block;margin:0 auto;" />
     <div class="card">
       <h1>{title}</h1>
       <div class="content">

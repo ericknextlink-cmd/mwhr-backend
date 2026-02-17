@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.orm import selectinload # Import selectinload
 
 from app.api import deps
-from app.models.application import Application, ApplicationRead, ApplicationStatus, CertificateType, ApplicationReadAdmin
+from app.models.application import Application, ApplicationRead, ApplicationReadAdmin, ApplicationStatus, CertificateType
 from app.models.user import User
 from app.models.company_info import CompanyInfo, CompanyInfoRead
 from app.models.director import DirectorRead
@@ -153,48 +153,60 @@ async def list_applications(
     
     result = await session.exec(query)
     applications = result.all()
-    
-    admin_apps = []
-    for app in applications:
-        admin_app = ApplicationReadAdmin.from_orm(app)
-        if app.company_info:
-            admin_app.company_name = app.company_info.company_name
-        if app.user:
-            admin_app.user_email = app.user.email
-        admin_apps.append(admin_app)
-        
-    return admin_apps
 
-@router.get("/applications/{id}/details", response_model=AdminApplicationDetails)
+    return [
+        ApplicationReadAdmin(
+            **ApplicationRead.from_application(
+                app,
+                company_name=app.company_info.company_name if app.company_info else None,
+                user_email=app.user.email if app.user else None,
+            ).model_dump(),
+            internal_id=app.id,
+        )
+        for app in applications
+    ]
+
+@router.get("/applications/{application_uid}/details", response_model=AdminApplicationDetails)
 async def get_application_details_for_admin(
-    id: int,
+    application_uid: uuid.UUID,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_active_admin),
 ):
     """
-    Get full details of a specific application for admin review, including company info, directors, and documents.
+    Get full details of a specific application for admin review. application_uid is the application UUID (internal_uid).
     """
-    application = await session.exec(
-        select(Application).where(Application.id == id).options(
+    result = await deps.get_application_by_uid(session, application_uid)
+    if not result:
+        raise HTTPException(status_code=404, detail="Application not found")
+    app_result = await session.exec(
+        select(Application).where(Application.id == result.id).options(
             selectinload(Application.company_info),
             selectinload(Application.directors),
             selectinload(Application.documents),
-            selectinload(Application.reviewer)
+            selectinload(Application.reviewer),
+            selectinload(Application.user),
         )
     )
-    result = application.first()
+    result = app_result.one()
 
     if not result:
         raise HTTPException(status_code=404, detail="Application not found")
-    
-    # Manually populate AdminApplicationDetails to include reviewer_email
-    # Since result is an Application object, we can convert it or just attach the field if Pydantic allows (it doesn't on ORM objects directly)
-    # Better to create the response object explicitly.
-    
-    details = AdminApplicationDetails.from_orm(result)
-    if result.reviewer:
-        details.reviewer_email = result.reviewer.email
-    details.ai_analysis = getattr(result, "ai_analysis_json", None)
+
+    company_name = result.company_info.company_name if result.company_info else None
+    user_email = result.user.email if result.user else None
+    base = ApplicationRead.from_application(
+        result,
+        company_name=company_name,
+        user_email=user_email,
+    )
+    details = AdminApplicationDetails(
+        **base.model_dump(),
+        company_info=result.company_info,
+        directors=result.directors or [],
+        documents=result.documents or [],
+        reviewer_email=result.reviewer.email if result.reviewer else None,
+        ai_analysis=getattr(result, "ai_analysis_json", None),
+    )
         
     # Convert document storage paths to signed URLs for secure access
     if details.documents:
@@ -211,18 +223,17 @@ class SaveAnalysisRequest(BaseModel):
     analysis: dict  # Full analysis result JSON from frontend
 
 
-@router.patch("/applications/{id}/analysis")
+@router.patch("/applications/{application_uid}/analysis")
 async def save_application_analysis(
-    id: int,
+    application_uid: uuid.UUID,
     body: SaveAnalysisRequest,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_active_admin),
 ):
     """
-    Store AI analysis result for an application. Avoids re-running analysis;
-    when the admin page loads, existing analysis is shown and the button becomes "Run new analysis".
+    Store AI analysis result for an application. application_uid is the application UUID (internal_uid).
     """
-    application = await session.get(Application, id)
+    application = await deps.get_application_by_uid(session, application_uid)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     application.ai_analysis_json = body.analysis
@@ -231,17 +242,17 @@ async def save_application_analysis(
     return {"ok": True, "message": "Analysis saved."}
 
 
-@router.patch("/applications/{id}/status", response_model=ApplicationRead)
+@router.patch("/applications/{application_uid}/status", response_model=ApplicationRead)
 async def update_application_status(
-    id: int,
-    status: ApplicationStatus, # Directly take the enum status
+    application_uid: uuid.UUID,
+    status: ApplicationStatus,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_active_admin),
 ):
     """
-    Approve or Reject an application.
+    Approve or Reject an application. application_uid is the application UUID (internal_uid).
     """
-    application = await session.get(Application, id)
+    application = await deps.get_application_by_uid(session, application_uid)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     
@@ -284,29 +295,27 @@ async def update_application_status(
         
     session.add(application)
     
-    # Audit Log
     await log_audit_event(
         session,
         user_id=current_user.id,
         action=f"STATUS_UPDATE_{status.upper()}",
         target_type="application",
         target_id=application.id,
-        target_label=f"Application #{application.id}", # Or maybe application.certificate_type?
+        target_label=f"Application {application.internal_uid}",
         details=f"Status changed to {status}"
     )
 
-    # Notify User
     await notify_user(
         session,
         user_id=application.user_id,
         title=f"Application {status.title()}",
-        message=f"Your application #{application.id} for {application.certificate_type.replace('_', ' ').title()} has been {status}.",
-        link=f"/dashboard?id={application.id}" # Or specific view
+        message=f"Your application for {application.certificate_type.replace('_', ' ').title()} has been {status}.",
+        link=f"/dashboard?id={application.internal_uid}"
     )
 
     await session.commit()
     await session.refresh(application)
-    return application
+    return ApplicationRead.from_application(application)
 
 @router.get("/renewals/expiring", response_model=List[ApplicationRead])
 async def get_expiring_certificates(
@@ -327,18 +336,19 @@ async def get_expiring_certificates(
     ).order_by(Application.expiry_date.asc())
     
     result = await session.exec(query)
-    return result.all()
+    apps = result.all()
+    return [ApplicationRead.from_application(app) for app in apps]
 
-@router.post("/applications/{id}/assign", response_model=ApplicationRead)
+@router.post("/applications/{application_uid}/assign", response_model=ApplicationRead)
 async def assign_application(
-    id: int,
+    application_uid: uuid.UUID,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_active_admin),
 ):
     """
-    Assign an application to the current admin.
+    Assign an application to the current admin. application_uid is the application UUID (internal_uid).
     """
-    application = await session.get(Application, id)
+    application = await deps.get_application_by_uid(session, application_uid)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     
@@ -354,24 +364,24 @@ async def assign_application(
     await log_audit_event(
         session, user_id=current_user.id, action="APPLICATION_ASSIGNED",
         target_type="application", target_id=application.id, 
-        target_label=f"Application #{application.id}",
+        target_label=f"Application {application.internal_uid}",
         details=f"Assigned to {current_user.email}"
     )
     
     await session.commit()
     await session.refresh(application)
-    return application
+    return ApplicationRead.from_application(application)
 
-@router.post("/applications/{id}/unassign", response_model=ApplicationRead)
+@router.post("/applications/{application_uid}/unassign", response_model=ApplicationRead)
 async def unassign_application(
-    id: int,
+    application_uid: uuid.UUID,
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_active_admin),
 ):
     """
-    Unassign an application.
+    Unassign an application. application_uid is the application UUID (internal_uid).
     """
-    application = await session.get(Application, id)
+    application = await deps.get_application_by_uid(session, application_uid)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
     
@@ -384,13 +394,13 @@ async def unassign_application(
     await log_audit_event(
         session, user_id=current_user.id, action="APPLICATION_UNASSIGNED",
         target_type="application", target_id=application.id, 
-        target_label=f"Application #{application.id}",
+        target_label=f"Application {application.internal_uid}",
         details="Unassigned"
     )
     
     await session.commit()
     await session.refresh(application)
-    return application
+    return ApplicationRead.from_application(application)
 
 # --- Template Management Endpoints ---
 

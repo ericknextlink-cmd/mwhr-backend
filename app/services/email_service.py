@@ -107,19 +107,20 @@ async def send_invoice_email(
 ) -> None:
     """Send the 2-page invoice PDF to the applicant after payment."""
     subject = f"Invoice for your Certificate Application #{application_id}"
-    portal_link = f"{settings.FRONTEND_URL}/dashboard"
+    # Link to certificates page (invoice and certs listed there). Unauthenticated users are redirected to login by the app.
+    certificates_link = f"{settings.FRONTEND_URL}/dashboard/certificates"
 
     body = f"""
     <p>Dear {applicant_name},</p>
     <p>Thank you for completing payment for your certificate application.</p>
     <p>Please find your official invoice attached to this email (letter + invoice).</p>
-    <p>You can also download it anytime from your dashboard.</p>
+    <p>You can also view and download it anytime from your certificates page.</p>
     """
     html_content = wrap_email_body(
         title="Your invoice is attached",
         body_html=body,
-        button_text="Open dashboard",
-        button_link=portal_link,
+        button_text="View certificates & invoice",
+        button_link=certificates_link,
     )
     await send_email(
         email_to=email_to,

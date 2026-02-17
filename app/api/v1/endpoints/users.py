@@ -1,15 +1,34 @@
-from typing import List
+from typing import List, Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlalchemy.orm import selectinload
 from app.db.session import get_session
-from app.models.user import User, UserCreate, UserRead
+from app.models.user import User, UserCreate, UserRead, UserRole
+from app.models.application import Application, ApplicationReadForApplicant
 from app.core.security import get_password_hash, verify_password, create_verification_token, verify_token
 from app.api import deps
 from app.services import email_service
 from pydantic import BaseModel
 
 router = APIRouter()
+
+
+class UserMeRead(BaseModel):
+    """Current user with applications list (for /me)."""
+    id: uuid.UUID
+    email: str
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    company_registration_number: Optional[str] = None
+    company_type: Optional[str] = None
+    is_active: bool = True
+    is_verified: bool = False
+    is_superuser: bool = False
+    role: UserRole = UserRole.USER
+    tutorials_completed: bool = False
+    applications: List[ApplicationReadForApplicant] = []
 
 @router.post("/verify-email/{token}", response_model=dict)
 async def verify_email(
@@ -45,14 +64,48 @@ class UserProfileUpdate(BaseModel):
     phone_number: str | None = None
     tutorials_completed: bool | None = None
 
-@router.get("/me", response_model=UserRead)
+@router.get("/me", response_model=UserMeRead)
 async def read_user_me(
+    session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Get current user.
+    Get current user with their applications.
     """
-    return current_user
+    stmt = (
+        select(Application)
+        .where(Application.user_id == current_user.id)
+        .options(selectinload(Application.company_info), selectinload(Application.user))
+        .order_by(Application.updated_at.desc())
+    )
+    result = await session.exec(stmt)
+    apps = result.all()
+
+    def _company_name(app: Application):
+        return app.company_info.company_name if getattr(app, "company_info", None) and app.company_info else None
+
+    def _user_email(app: Application):
+        return app.user.email if getattr(app, "user", None) and app.user else None
+
+    applications = [
+        ApplicationReadForApplicant.from_application(app, company_name=_company_name(app), user_email=_user_email(app))
+        for app in apps
+    ]
+
+    return UserMeRead(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        phone_number=current_user.phone_number,
+        company_registration_number=current_user.company_registration_number,
+        company_type=current_user.company_type,
+        is_active=current_user.is_active,
+        is_verified=current_user.is_verified,
+        is_superuser=current_user.is_superuser,
+        role=current_user.role,
+        tutorials_completed=current_user.tutorials_completed,
+        applications=applications,
+    )
 
 @router.patch("/me", response_model=UserRead)
 async def update_user_me(

@@ -1,16 +1,26 @@
 import uuid
-from typing import Generator
+from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from pydantic import ValidationError
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core import security
 from app.core.config import settings
 from app.db.session import get_session
+from app.models.application import Application
 from app.models.user import User, UserRole
 from app.models.token import TokenPayload
+
+
+async def get_application_by_uid(
+    session: AsyncSession, application_uid: uuid.UUID
+) -> Optional[Application]:
+    """Resolve application by its public UUID (internal_uid). Returns None if not found."""
+    result = await session.exec(select(Application).where(Application.internal_uid == application_uid))
+    return result.first()
 
 reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/login/access-token"

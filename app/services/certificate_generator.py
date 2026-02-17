@@ -20,6 +20,11 @@ TEMPLATE_DIR = str(BASE_DIR / "certificate_templates")
 FONT_DIR = str(BASE_DIR / "fonts")
 
 class CertificateGenerator:
+    # Layout offsets for images (in points). Negative = left, positive = right.
+    EXPIRED_IMG_X_OFFSET = 280
+    EXPIRED2_IMG_X_OFFSET = 280
+    RENEW_IMG_X_OFFSET = 320
+
     def __init__(self):
         self.template_cache = {}
         self.fonts = {
@@ -65,6 +70,22 @@ class CertificateGenerator:
                 return BytesIO(content)
         return None
 
+    def get_image_bytes(self, image_name: str) -> BytesIO | None:
+        """Load image (e.g. expired.png, renew.png) from Supabase templates/ or local certificate_templates/."""
+        if image_name in self.template_cache:
+            return BytesIO(self.template_cache[image_name])
+        file_bytes = storage_service.download_file(f"templates/{image_name}")
+        if file_bytes:
+            self.template_cache[image_name] = file_bytes
+            return BytesIO(file_bytes)
+        local_path = os.path.join(TEMPLATE_DIR, image_name)
+        if os.path.exists(local_path):
+            with open(local_path, "rb") as f:
+                content = f.read()
+                self.template_cache[image_name] = content
+                return BytesIO(content)
+        return None
+
     def format_date_ordinal(self, dt: datetime) -> str:
         day = dt.day
         suffix = 'th' if 11 <= day <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
@@ -82,7 +103,7 @@ class CertificateGenerator:
         company_name: str,
         renewal_token: Optional[str] = None,
         is_expired: bool = False,
-        certificate_open_password: Optional[str] = None,
+        certificate_owner_password: Optional[str] = None,
     ) -> Tuple[BytesIO, str]:
         raw_type = application.certificate_type
         base_name = raw_type.value if hasattr(raw_type, 'value') else str(raw_type)
@@ -194,13 +215,30 @@ class CertificateGenerator:
         center_x = width / 2
 
         if is_expired:
-            # Expired certificate layout: SORRY / CERTIFICATE / HAS EXPIRED (blocky, prominent)
-            c.setFont(self.fonts["bold"], 36)
-            c.drawCentredString(center_x, sy(1550), "SORRY")
-            c.drawCentredString(center_x, sy(1480), "CERTIFICATE")
-            c.drawCentredString(center_x, sy(1410), "HAS EXPIRED")
-            c.setFont(self.fonts["regular"], 9)
-            c.drawCentredString(center_x, sy(1280), "CERTIFICATE HAS EXPIRED")
+            # Expired certificate: use images from templates (no background drawn; use transparent PNGs to avoid black)
+            # Main "SORRY CERTIFICATE HAS EXPIRED" image. Move left/right via EXPIRED_IMG_X_OFFSET.
+            expired_buf = self.get_image_bytes("expired.png")
+            if expired_buf:
+                expired_buf.seek(0)
+                img_reader = ImageReader(expired_buf)
+                iw, ih = img_reader.getSize()
+                if ih > 0:
+                    desired_h = (550 / ref_h) * height
+                    scale = desired_h / ih
+                    desired_w = iw * scale
+                    x_exp = center_x - desired_w / 2 + self.EXPIRED_IMG_X_OFFSET
+                    c.drawImage(img_reader, x_exp, sy(1000) - desired_h, width=desired_w, height=desired_h)
+            # Secondary "CERTIFICATE HAS EXPIRED". Move via EXPIRED2_IMG_X_OFFSET.
+            expired2_buf = self.get_image_bytes("expired2.png")
+            if expired2_buf:
+                expired2_buf.seek(0)
+                img2 = ImageReader(expired2_buf)
+                iw2, ih2 = img2.getSize()
+                if ih2 > 0:
+                    h2 = (120 / ref_h) * height
+                    w2 = iw2 * (h2 / ih2)
+                    x_exp2 = center_x - w2 / 2 + self.EXPIRED2_IMG_X_OFFSET
+                    c.drawImage(img2, x_exp2, sy(2400) - h2, width=w2, height=h2)
         else:
             # Normal certificate: draw all text elements
             for item in text_elements.values():
@@ -219,26 +257,28 @@ class CertificateGenerator:
              
         qr = qrcode.make(verify_url)
         qr_img = ImageReader(qr.get_image())
-        qr_size = sx(300)
+        qr_size = sx(200)
         c.drawImage(qr_img, sx(2118), sy(3202) - qr_size, width=qr_size, height=qr_size)
 
-        # Renewal link under signatures: show "RENEW NOW" in blocky style; click opens renewal URL
-        if renewal_token:
-            renewal_url = f"{settings.FRONTEND_URL}/renewal?token={renewal_token}"
-            c.setFont(self.fonts["bold"], 22)
-            c.setFillColorRGB(0.35, 0.35, 0.35)  # grey to match stencil/expired text
-            renew_text = "RENEW NOW"
-            y_renew = sy(600)
-            c.drawCentredString(center_x, y_renew, renew_text)
-            # Make the "RENEW NOW" text a clickable link (same URL as before)
-            text_w = c.stringWidth(renew_text, self.fonts["bold"], 22)
-            half_w = text_w / 2
-            c.linkURL(
-                renewal_url,
-                (center_x - half_w, y_renew - 22, center_x + half_w, y_renew + 4),
-                relative=0,
-            )
-            c.setFillColorRGB(0, 0, 0)
+        # Renewal: show renew.png on expired certs always; also when renewal_token set (then link is clickable)
+        show_renew = is_expired or renewal_token
+        if show_renew:
+            renewal_url = f"{settings.FRONTEND_URL}/renewal?token={renewal_token}" if renewal_token else None
+            y_renew = sy(3100)
+            renew_h_ref = 120
+            renew_h = (renew_h_ref / ref_h) * height
+            renew_buf = self.get_image_bytes("renew.png")
+            if renew_buf:
+                renew_buf.seek(0)
+                r_img = ImageReader(renew_buf)
+                rw, rh = r_img.getSize()
+                if rh > 0:
+                    scale_r = renew_h / rh
+                    renew_w = rw * scale_r
+                    renew_x = center_x - renew_w / 2 + self.RENEW_IMG_X_OFFSET
+                    c.drawImage(r_img, renew_x, y_renew, width=renew_w, height=renew_h)
+                    if renewal_url:
+                        c.linkURL(renewal_url, (renew_x, y_renew, renew_x + renew_w, y_renew + renew_h), relative=0)
 
         c.save(); overlay_buffer.seek(0)
         overlay_reader = PdfReader(overlay_buffer); overlay_page = overlay_reader.pages[0]
@@ -249,10 +289,10 @@ class CertificateGenerator:
         writer = PdfWriter()
         writer.add_page(page_orig)
 
-        # PDF encryption: optional open password (user-provided at generation time, hashed in DB);
-        # owner password from env restricts copy/edit in viewers that support it.
-        user_pwd = certificate_open_password if certificate_open_password else ""
-        owner_pwd = getattr(settings, "CERTIFICATE_OWNER_PASSWORD", None) or "mwhwr-cert-secure"
+        # PDF encryption: no open password (anyone can view). Owner password restricts editing/copying.
+        # Owner password = user's account password when provided at download, else CERTIFICATE_OWNER_PASSWORD from env.
+        user_pwd = ""
+        owner_pwd = certificate_owner_password or getattr(settings, "CERTIFICATE_OWNER_PASSWORD", None) or "mwhwr-cert-secure"
         try:
             no_copy_flag = 0xFFFFFFFC & ~32
             writer.encrypt(

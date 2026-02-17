@@ -1,3 +1,4 @@
+import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
@@ -10,17 +11,6 @@ from app.models.user import User
 
 router = APIRouter()
 
-async def verify_application_ownership(
-    session: AsyncSession, application_id: int, user_id: int
-) -> Application:
-    """Helper to verify if an application belongs to a user."""
-    application = await session.get(Application, application_id)
-    if not application:
-        raise HTTPException(status_code=404, detail="Application not found")
-    if application.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    return application
-
 @router.post("/", response_model=DirectorRead)
 async def create_director(
     *,
@@ -29,16 +19,23 @@ async def create_director(
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Add a director to an application.
+    Add a director to an application. application_id in body is the application UUID (internal_uid).
     """
-    await verify_application_ownership(session, director_in.application_id, current_user.id)
+    try:
+        app_uid = uuid.UUID(director_in.application_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid application ID format")
+    application = await deps.get_application_by_uid(session, app_uid)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    director = Director.model_validate(director_in)
+    data = director_in.model_dump(exclude={"application_id"})
+    director = Director(**data, application_id=application.id)
     session.add(director)
     
-    # Update application step to 6 (Documents) if it's less than 6
-    application = await session.get(Application, director_in.application_id)
-    if application and application.current_step < 6:
+    if application.current_step < 6:
         application.current_step = 6
         session.add(application)
 
@@ -69,20 +66,24 @@ async def read_latest_directors(
             
     return [] # Return empty list if no previous directors found
 
-@router.get("/{application_id}", response_model=List[DirectorRead])
+@router.get("/{application_uid}", response_model=List[DirectorRead])
 async def read_directors(
     *,
     session: AsyncSession = Depends(deps.get_session),
-    application_id: int,
+    application_uid: uuid.UUID,
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    List directors for a specific application.
+    List directors for a specific application. application_uid is the application UUID (internal_uid).
     """
-    await verify_application_ownership(session, application_id, current_user.id)
+    application = await deps.get_application_by_uid(session, application_uid)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
 
     directors = await session.exec(
-        select(Director).where(Director.application_id == application_id)
+        select(Director).where(Director.application_id == application.id)
     )
     return directors.all()
 
@@ -100,8 +101,9 @@ async def delete_director(
     if not director:
         raise HTTPException(status_code=404, detail="Director not found")
     
-    # Verify ownership via application
-    await verify_application_ownership(session, director.application_id, current_user.id)
+    application = await session.get(Application, director.application_id)
+    if not application or application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     
     await session.delete(director)
     await session.commit()

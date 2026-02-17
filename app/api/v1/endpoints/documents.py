@@ -1,6 +1,9 @@
+import uuid
 from typing import List
 from datetime import datetime
+from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -12,58 +15,44 @@ from app.services.storage_service import storage_service
 
 router = APIRouter()
 
-async def verify_application_ownership(
-    session: AsyncSession, application_id: int, user_id: int
-) -> Application:
-    """Helper to verify if an application belongs to a user."""
-    application = await session.get(Application, application_id)
-    if not application:
-        raise HTTPException(status_code=404, detail="Application not found")
-    if application.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-    return application
-
 @router.post("/upload/", response_model=DocumentRead)
 async def upload_document(
-    application_id: int = Form(...),
+    application_id: str = Form(...),  # UUID (internal_uid)
     document_type: str = Form(...),
     file: UploadFile = File(...),
     session: AsyncSession = Depends(deps.get_session),
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    Upload a document to Supabase Storage.
-    If a document of the same type already exists, replaces it:
-    - Stores old file_url in previous_file_url
-    - Uploads new file
-    - Deletes old file from storage
-    - Updates document record with new file_url
+    Upload a document to Supabase Storage. application_id is the application UUID (internal_uid).
+    If a document of the same type already exists, replaces it.
     """
-    await verify_application_ownership(session, application_id, current_user.id)
+    try:
+        app_uid = uuid.UUID(application_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid application ID format")
+    application = await deps.get_application_by_uid(session, app_uid)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
 
-    # Validate document type
     try:
         doc_type_enum = DocumentType(document_type)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid document type")
-
-    application = await session.get(Application, application_id)
-    if not application:
-        raise HTTPException(status_code=404, detail="Application not found")
     
     existing_doc_query = select(Document).where(
-        Document.application_id == application_id,
+        Document.application_id == application.id,
         Document.document_type == doc_type_enum
     )
     existing_doc_result = await session.exec(existing_doc_query)
     existing_document = existing_doc_result.first()
 
-    # Upload to applications/{application_id}/documents/ for proper folder structure
-    storage_path = await storage_service.upload_file(file, application_id)
+    storage_path = await storage_service.upload_file(file, application.id, document_type=doc_type_enum.value)
 
     old_file_url = None
     if existing_document:
-        # Document replacement: track old file and delete it
         old_file_url = existing_document.file_url
         existing_document.previous_file_url = old_file_url
         existing_document.file_url = storage_path
@@ -71,18 +60,15 @@ async def upload_document(
         existing_document.uploaded_at = datetime.utcnow()
         document = existing_document
     else:
-        # New document
         document = Document(
-            application_id=application_id,
+            application_id=application.id,
             document_type=doc_type_enum,
             filename=file.filename,
             file_url=storage_path
         )
         session.add(document)
 
-    # Update application step to 7 (Review) if it's less than 7
-    application = await session.get(Application, application_id)
-    if application and application.current_step < 7:
+    if application.current_step < 7:
         application.current_step = 7
         session.add(application)
 
@@ -101,21 +87,57 @@ async def upload_document(
     document.file_url = storage_service.get_signed_url(document.file_url)
     return document
 
-@router.get("/{application_id}", response_model=List[DocumentRead])
-async def read_documents(
-    *,
+
+@router.get("/download/{document_id}")
+async def download_document(
+    document_id: int,
     session: AsyncSession = Depends(deps.get_session),
-    application_id: int,
     current_user: User = Depends(deps.get_current_user),
 ):
     """
-    List documents for a specific application.
+    Stream the document file with a friendly filename for download/preview.
+    Content-Disposition uses the stored original filename so the browser shows a proper name.
+    """
+    document = await session.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    application = await session.get(Application, document.application_id)
+    if not application or application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    file_bytes = storage_service.download_file(document.file_url)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail="File not found in storage.")
+    # Use original filename for download; sanitize for Content-Disposition
+    display_name = (document.filename or "document").strip()
+    if "/" in display_name or "\\" in display_name:
+        display_name = display_name.replace("\\", "/").split("/")[-1]
+    display_name = display_name.replace('"', "%22")
+    return StreamingResponse(
+        BytesIO(file_bytes),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{display_name}"'},
+    )
+
+
+@router.get("/{application_uid}", response_model=List[DocumentRead])
+async def read_documents(
+    *,
+    session: AsyncSession = Depends(deps.get_session),
+    application_uid: uuid.UUID,
+    current_user: User = Depends(deps.get_current_user),
+):
+    """
+    List documents for a specific application. application_uid is the application UUID (internal_uid).
     Generates Signed URLs for secure access.
     """
-    await verify_application_ownership(session, application_id, current_user.id)
+    application = await deps.get_application_by_uid(session, application_uid)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
 
     documents = await session.exec(
-        select(Document).where(Document.application_id == application_id)
+        select(Document).where(Document.application_id == application.id)
     )
     docs = documents.all()
     
@@ -145,7 +167,9 @@ async def delete_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    await verify_application_ownership(session, document.application_id, current_user.id)
+    application = await session.get(Application, document.application_id)
+    if not application or application.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
     
     # Delete file from Supabase Storage
     # document.file_url holds the storage path

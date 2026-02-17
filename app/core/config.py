@@ -19,9 +19,11 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
     FRONTEND_URL: str = "http://localhost:3000"
-    # Optional: owner password for certificate PDF encryption (restricts copy/text selection)
+    # Certificate PDF: no open password (anyone can view). Edit/copy is protected by owner password.
+    # Set this in .env to a strong random value (e.g. openssl rand -base64 32). Used when the
+    # user does not supply their account password at download; if unset, a default is used.
     CERTIFICATE_OWNER_PASSWORD: str | None = None
 
     # Invoice PDF (post-payment letter + invoice)
@@ -32,6 +34,8 @@ class Settings(BaseSettings):
     MINISTRY_ADDRESS: str = "Ministries Area, Off Starlets 91 Road, Accra, Ghana, P.O. Box M43, Ministries - Accra, Digital Address: GA-144-0550"
     MINISTRY_PHONE: str = "+233 (0)577 902 988 / +233 (0)577 902 933"
     MINISTRY_EMAIL: str = "info@mwhwr.gov.gh"
+    # Optional path to ministry logo image for invoice PDF (PNG/JPEG). If not set, looks for assets/ministry_logo.png in project root.
+    INVOICE_LOGO_PATH: str | None = None
     
     # Email
     EMAILS_ENABLED: bool = False

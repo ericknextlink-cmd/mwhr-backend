@@ -17,6 +17,7 @@ class AnalyzeDocumentRequest(BaseModel):
     extract_forms: Optional[bool] = False
     languages: Optional[List[str]] = ["eng"]
     application_company_name: Optional[str] = None
+    thread_id: Optional[str] = None
 
 class AnalyzeDocumentResponse(BaseModel):
     success: bool
