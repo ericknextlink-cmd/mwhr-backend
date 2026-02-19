@@ -10,7 +10,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional, Tuple
 
-import qrcode
 from pypdf import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
@@ -20,6 +19,7 @@ from app.core.config import settings
 from app.models.application import Application
 from app.models.company_info import CompanyInfo
 from app.services.storage_service import storage_service
+from app.services.datamatrix_helper import make_datamatrix_image
 
 try:
     import barcode
@@ -63,14 +63,8 @@ def _make_barcode_image(serial_code: str) -> Optional[BytesIO]:
         return None
 
 def _make_qr_image(data: str, box_size: int = 4) -> BytesIO:
-    qr = qrcode.QRCode(box_size=box_size, border=2)
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+    """Data Matrix (or QR fallback) for invoice; same size/position as before."""
+    return make_datamatrix_image(data)
 
 class InvoicePdfGenerator:
     # Layout constants (A4 default)
@@ -432,6 +426,7 @@ class InvoicePdfGenerator:
             page2.merge_page(PdfReader(overlay2_buf).pages[0])
             writer.add_page(page2)
 
+        writer.add_metadata({"/Producer": "ministry-whwr", "/Creator": "ministry-whwr"})
         output = BytesIO()
         writer.write(output)
         output.seek(0)

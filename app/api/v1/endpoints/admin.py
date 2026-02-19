@@ -474,3 +474,82 @@ async def upload_template(
     except Exception as e:
         print(f"Error uploading template: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to upload template: {str(e)}")
+
+
+# --- Signature Management (Super Admin only) ---
+SIGNATURES_PREFIX = "templates/signatures"
+
+@router.get("/signatures", response_model=List[dict])
+async def list_signatures(
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_active_admin),
+):
+    """List signature images in storage. Super Admin only."""
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only Super Admins can manage signatures.")
+    if not storage_service.client:
+        raise HTTPException(status_code=500, detail="Storage not configured.")
+    try:
+        res = storage_service.client.storage.from_(settings.SUPABASE_BUCKET_NAME).list("templates/signatures")
+        return res if isinstance(res, list) else []
+    except Exception as e:
+        if "not found" in str(e).lower() or "404" in str(e).lower():
+            return []
+        print(f"Error listing signatures: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list signatures.")
+
+@router.post("/signatures")
+async def upload_signature(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_active_admin),
+):
+    """Upload a signature image (PNG). Stored under templates/signatures/. Super Admin only."""
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only Super Admins can manage signatures.")
+    if not storage_service.client:
+        raise HTTPException(status_code=500, detail="Storage not configured.")
+    if not file.filename or not (file.filename.lower().endswith(".png") or file.filename.lower().endswith(".jpg") or file.filename.lower().endswith(".jpeg")):
+        raise HTTPException(status_code=400, detail="Only PNG or JPG images are allowed.")
+    file_path = f"{SIGNATURES_PREFIX}/{file.filename}"
+    content = await file.read()
+    content_type = "image/png" if file.filename.lower().endswith(".png") else "image/jpeg"
+    try:
+        storage_service.client.storage.from_(settings.SUPABASE_BUCKET_NAME).upload(
+            file_path, content, {"content-type": content_type, "upsert": "true"}
+        )
+        await log_audit_event(
+            session, user_id=current_user.id, action="SIGNATURE_UPDATED", target_type="signature",
+            target_id=0, target_label=file.filename, details=f"Signature {file.filename} uploaded."
+        )
+        await session.commit()
+        return {"message": f"Signature {file.filename} uploaded.", "path": file_path}
+    except Exception as e:
+        print(f"Error uploading signature: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload signature: {str(e)}")
+
+@router.delete("/signatures/{filename:path}")
+async def delete_signature(
+    filename: str,
+    session: AsyncSession = Depends(deps.get_session),
+    current_user: User = Depends(deps.get_current_active_admin),
+):
+    """Delete a signature image. Super Admin only."""
+    if not current_user.is_superuser:
+        raise HTTPException(status_code=403, detail="Only Super Admins can manage signatures.")
+    if not storage_service.client:
+        raise HTTPException(status_code=500, detail="Storage not configured.")
+    if ".." in filename or "/" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    file_path = f"{SIGNATURES_PREFIX}/{filename}"
+    try:
+        storage_service.client.storage.from_(settings.SUPABASE_BUCKET_NAME).remove([file_path])
+        await log_audit_event(
+            session, user_id=current_user.id, action="SIGNATURE_DELETED", target_type="signature",
+            target_id=0, target_label=filename, details=f"Signature {filename} deleted."
+        )
+        await session.commit()
+        return {"message": f"Signature {filename} deleted."}
+    except Exception as e:
+        print(f"Error deleting signature: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete signature.")

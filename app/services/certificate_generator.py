@@ -1,5 +1,4 @@
 import os
-import qrcode
 import hashlib
 from typing import Tuple, Optional
 from reportlab.pdfgen import canvas
@@ -13,6 +12,7 @@ from pathlib import Path
 from app.core.config import settings
 
 from app.services.storage_service import storage_service
+from app.services.datamatrix_helper import make_datamatrix_image
 
 # Resolve paths relative to this file
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -248,21 +248,18 @@ class CertificateGenerator:
                 else:
                     c.drawString(sx(item["x"]), sy(item["y"]), item["text"])
 
-        # QR Code (x: 2118, y: 3202)
-        # Use security token for verification if available (XSCNS), else legacy ID
+        # Data Matrix (same position/size as before: x 2118, y 3202, size 200 ref units)
         if getattr(application, "security_token", None):
              verify_url = f"{settings.FRONTEND_URL}/verify/cert/{application.security_token}"
         else:
-             verify_url = f"{settings.FRONTEND_URL}/verify?id={application.id}" 
-             
-        qr = qrcode.make(verify_url)
-        qr_img = ImageReader(qr.get_image())
+             verify_url = f"{settings.FRONTEND_URL}/verify?id={application.id}"
+        dm_buf = make_datamatrix_image(verify_url)
+        dm_img = ImageReader(dm_buf)
         qr_size = sx(200)
-        c.drawImage(qr_img, sx(2118), sy(3202) - qr_size, width=qr_size, height=qr_size)
+        c.drawImage(dm_img, sx(2118), sy(3202) - qr_size, width=qr_size, height=qr_size)
 
-        # Renewal: show renew.png on expired certs always; also when renewal_token set (then link is clickable)
-        show_renew = is_expired or renewal_token
-        if show_renew:
+        # Renewal: show renew image + link only on expired certificates (not on valid certs)
+        if is_expired:
             renewal_url = f"{settings.FRONTEND_URL}/renewal?token={renewal_token}" if renewal_token else None
             y_renew = sy(3100)
             renew_h_ref = 120
@@ -280,6 +277,29 @@ class CertificateGenerator:
                     if renewal_url:
                         c.linkURL(renewal_url, (renew_x, y_renew, renew_x + renew_w, y_renew + renew_h), relative=0)
 
+        # Signatures: load from templates/signatures/ (e.g. signature1.png, signature2.png) and draw at bottom
+        sig_h_ref = 300
+        sig_y_ref = 2500
+        sig_h = (sig_h_ref / ref_h) * height
+        for idx, sig_name in enumerate(["signature1.png", "signature2.png"]):
+            sig_buf = self.get_image_bytes(f"signatures/{sig_name}")
+            if not sig_buf:
+                continue
+            sig_buf.seek(0)
+            try:
+                sig_img = ImageReader(sig_buf)
+                sw, sh = sig_img.getSize()
+                if sh <= 0:
+                    continue
+                sig_w = sw * (sig_h / sh)
+                # Left signature at ~400 ref, right at ~1800 ref
+                sig_x_ref = 720 if idx == 0 else 1800
+                sig_x = sx(sig_x_ref)
+                sig_y = sy(sig_y_ref) - sig_h
+                c.drawImage(sig_img, sig_x, sig_y, width=sig_w, height=sig_h)
+            except Exception:
+                pass
+
         c.save(); overlay_buffer.seek(0)
         overlay_reader = PdfReader(overlay_buffer); overlay_page = overlay_reader.pages[0]
         page_orig.merge_page(overlay_page)
@@ -288,22 +308,28 @@ class CertificateGenerator:
         output_buffer = BytesIO()
         writer = PdfWriter()
         writer.add_page(page_orig)
+        writer.add_metadata({"/Producer": "ministry-whwr", "/Creator": "ministry-whwr"})
 
         # PDF encryption: no open password (anyone can view). Owner password restricts editing/copying.
         # Owner password = user's account password when provided at download, else CERTIFICATE_OWNER_PASSWORD from env.
         user_pwd = ""
         owner_pwd = certificate_owner_password or getattr(settings, "CERTIFICATE_OWNER_PASSWORD", None) or "mwhwr-cert-secure"
+        # Permission bits: 4=print, 8=modify, 16=copy, 32=annotations. Use 4 only = view+print, no edit/copy/annotate.
+        allow_print_only = 4
         try:
-            no_copy_flag = 0xFFFFFFFC & ~32
             writer.encrypt(
                 user_password=user_pwd,
                 owner_password=owner_pwd,
-                permissions_flag=no_copy_flag,
+                permissions_flag=allow_print_only,
                 algorithm="AES-256",
             )
         except Exception:
             try:
-                writer.encrypt(user_password=user_pwd, owner_password=owner_pwd)
+                writer.encrypt(
+                    user_password=user_pwd,
+                    owner_password=owner_pwd,
+                    permissions_flag=allow_print_only,
+                )
             except Exception:
                 pass
 
